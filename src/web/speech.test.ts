@@ -117,12 +117,30 @@ test('a recovered result never redirects to another draft, including reused nati
   const f = fixture({ purpose: { kind: 'ask', requestId: 'reused' } }); t.after(() => f.service.dispose());
   await f.service.start(); f.original.editText('manual');
   const stopped = f.service.stop(); f.result.resolve('recognized'); await stopped;
+  f.service.clearTarget(f.original.id);
+  assert.equal(f.service.getSnapshot().recovery?.text, 'recognized');
   const replacement = draft('different-lifetime', { kind: 'ask', requestId: 'reused' });
   f.service.setTarget({ draft: replacement, disabled: false, sendBlocked: false, selection: () => ({ start: 0, end: 0 }) });
   assert.equal(f.service.canInsert(), false);
   f.service.insertRecovery();
   assert.equal(replacement.getSnapshot().text, 'hello world');
   assert.equal(f.service.getSnapshot().recovery?.text, 'recognized');
+});
+test('a finished draft notice cannot claim insertion into a newly selected answer', async t => {
+  const f = fixture();
+  t.after(() => f.service.dispose());
+  await f.service.start();
+  const stopped = f.service.stop();
+  f.result.resolve('recognized');
+  await stopped;
+  assert.ok(f.service.getSnapshot().notice);
+  f.service.clearTarget('unrelated');
+  assert.ok(f.service.getSnapshot().notice);
+  f.service.clearTarget(f.original.id);
+  const answer = draft('answer', { kind: 'ask', requestId: 'new-question' });
+  f.service.setTarget({ draft: answer, disabled: false, sendBlocked: false, selection: () => ({ start: 0, end: 0 }) });
+  assert.equal(f.service.getSnapshot().notice, null);
+  assert.equal(answer.getSnapshot().text, 'hello world');
 });
 test('permission late grants are cancelled after input loss or module abort, with immediate lease release', async t => {
   for (const cause of ['unmount', 'navigation', 'abort', 'no-free-text', 'replacement'] as const) {

@@ -77,7 +77,8 @@ export class SpeechService {
   clearTarget(id: string): void {
     if (this.target?.draft.id !== id) return;
     this.target = null;
-    this.cancel('原输入框已关闭，语音输入已取消。');
+    if (this.operation) this.cancel('原输入框已关闭，语音输入已取消。');
+    else if (!this.state.recovery) this.update({ error: null, notice: null });
   }
   canStart(): boolean {
     if (this.disposed || this.operation || this.state.recovery || !this.target) return false;
