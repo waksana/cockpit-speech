@@ -49,11 +49,11 @@ test('provider failures are safe and never echo provider bodies or raw fetch err
     const adapter = azureTranscriber(async () => { calls++; return new Response('PRIVATE-PROVIDER-BODY', { status }); });
     await assert.rejects(adapter.transcribe(config, { audio }, signal()), error => {
       assert.ok(error instanceof Error); assert.doesNotMatch(error.message, /PRIVATE|synthetic-not/);
-      assert.match(error.message, status === 401 || status === 403 ? /authentication/ : /HTTP/); return true;
+      assert.match(error.message, status === 401 || status === 403 ? /鉴权失败/ : /HTTP/); return true;
     });
     assert.equal(calls, 1);
   }
-  await assert.rejects(azureTranscriber(async () => { throw new Error('PRIVATE-FETCH-DETAIL'); }).transcribe(config, { audio }, signal()), /could not be reached securely/);
+  await assert.rejects(azureTranscriber(async () => { throw new Error('PRIVATE-FETCH-DETAIL'); }).transcribe(config, { audio }, signal()), { code: 'PROVIDER_UNAVAILABLE' });
 });
 test('response reads are bounded even without content-length and release their reader', async () => {
   for (const response of [
@@ -69,13 +69,13 @@ test('provider honours cancellation and timeout without retry', async () => {
   const controller = new AbortController(); controller.abort();
   let calls = 0;
   const unused = azureTranscriber(async () => { calls++; return Response.json({}); });
-  await assert.rejects(unused.transcribe(config, { audio }, controller.signal), /cancelled/);
+  await assert.rejects(unused.transcribe(config, { audio }, controller.signal), { code: 'CANCELLED' });
   assert.equal(calls, 0);
   const keepAlive = setTimeout(() => {}, 1000);
   try {
     const waiting = azureTranscriber(async (_url, init) => new Promise((_resolve, reject) => {
       init!.signal!.addEventListener('abort', () => reject(init!.signal!.reason), { once: true });
     }), 5);
-    await assert.rejects(waiting.transcribe(config, { audio }, signal()), /timed out/);
+    await assert.rejects(waiting.transcribe(config, { audio }, signal()), { code: 'PROVIDER_TIMEOUT' });
   } finally { clearTimeout(keepAlive); }
 });

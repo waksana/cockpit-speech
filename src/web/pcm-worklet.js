@@ -8,11 +8,16 @@ class SpeechPcmProcessor extends AudioWorkletProcessor {
     this.stopped = false;
     this.port.onmessage = event => {
       if (event.data === 'stop' && !this.stopped) {
-        this.stopped = true;
-        this.flush();
-        this.port.postMessage({ type: 'done' });
+        this.finish(false);
       }
     };
+  }
+  finish(limited) {
+    if (this.stopped) return;
+    this.stopped = true;
+    this.flush();
+    if (limited) this.port.postMessage({ type: 'limit' });
+    this.port.postMessage({ type: 'done' });
   }
   flush() {
     if (!this.used) return;
@@ -24,12 +29,7 @@ class SpeechPcmProcessor extends AudioWorkletProcessor {
     if (this.stopped) return false;
     const channels = inputs[0];
     if (!channels?.length) return true;
-    const length = channels[0].length;
-    if (this.total + length > 16000 * 120) {
-      this.stopped = true;
-      this.port.postMessage({ type: 'limit' });
-      return false;
-    }
+    const length = Math.min(channels[0].length, 16000 * 120 - this.total);
     for (let index = 0; index < length; index++) {
       let mono = 0;
       for (const channel of channels) mono += channel[index] / channels.length;
@@ -37,6 +37,7 @@ class SpeechPcmProcessor extends AudioWorkletProcessor {
       if (this.used === this.buffer.length) this.flush();
     }
     this.total += length;
+    if (this.total === 16000 * 120) { this.finish(true); return false; }
     return true;
   }
 }

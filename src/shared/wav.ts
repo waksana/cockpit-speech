@@ -3,7 +3,7 @@ import { MAX_AUDIO_BYTES, MAX_SAMPLES, SAMPLE_RATE, SpeechError } from './limits
 export function encodeWav(chunks: readonly Float32Array[], samples: number): Uint8Array<ArrayBuffer> {
   if (!Number.isInteger(samples) || samples <= 0 || samples > MAX_SAMPLES
     || chunks.reduce((sum, chunk) => sum + chunk.length, 0) !== samples) {
-    throw new SpeechError('AUDIO_LIMIT', 'No audio was captured, or the 120-second recording limit was exceeded.');
+    throw new SpeechError('AUDIO_LIMIT', '没有录到音频，或录音数据超过两分钟上限。');
   }
   const bytes = new Uint8Array(44 + samples * 2);
   const view = new DataView(bytes.buffer);
@@ -18,7 +18,7 @@ export function encodeWav(chunks: readonly Float32Array[], samples: number): Uin
   text(36, 'data'); view.setUint32(40, samples * 2, true);
   let offset = 44;
   for (const chunk of chunks) for (const sample of chunk) {
-    if (!Number.isFinite(sample)) throw new SpeechError('AUDIO_INVALID', 'The microphone returned invalid audio.');
+    if (!Number.isFinite(sample)) throw new SpeechError('AUDIO_INVALID', '麦克风返回了无效音频。');
     const clamped = Math.max(-1, Math.min(1, sample));
     view.setInt16(offset, Math.round(clamped * (clamped < 0 ? 32768 : 32767)), true);
     offset += 2;
@@ -28,7 +28,7 @@ export function encodeWav(chunks: readonly Float32Array[], samples: number): Uin
 
 /** Accept only the single canonical mono PCM format produced by this module. */
 export function validateWav(bytes: Uint8Array): void {
-  const bad = () => new SpeechError('AUDIO_INVALID', 'Expected a nonempty mono 16 kHz, 16-bit PCM WAV recording, at most 120 seconds.');
+  const bad = () => new SpeechError('AUDIO_INVALID', '录音必须是非空的单声道 16 kHz、16 位 PCM WAV，时长不超过两分钟。');
   if (bytes.length < 46 || bytes.length > MAX_AUDIO_BYTES || bytes.length > 44 + MAX_SAMPLES * 2) throw bad();
   const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
   const text = (start: number, end: number) => String.fromCharCode(...bytes.subarray(start, end));

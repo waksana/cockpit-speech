@@ -1,7 +1,7 @@
 import type { ChatWindowSnapshot, DraftPurpose, HostSnapshot, ModuleDraft, ReadonlyState } from '@cockpit/module-api';
 import { SpeechError } from '../shared/limits.ts';
 import { recentContext } from './context.ts';
-import type { Recording, StartRecording } from './recorder.ts';
+import type { Recording, RecordingPreparation, PrepareRecording } from './recorder.ts';
 import type { Transcribe } from './transport.ts';
 
 export interface Selection { start: number; end: number }
@@ -9,7 +9,7 @@ export interface Target { draft: ModuleDraft; disabled: boolean; sendBlocked: bo
 interface Identity { id: string; sessionId: string; purpose: string }
 export interface Recovery extends Identity { text: string }
 export interface SpeechSnapshot {
-  phase: 'idle' | 'permission' | 'recording' | 'stopping' | 'transcribing';
+  phase: 'idle' | 'checking' | 'permission' | 'recording' | 'stopping' | 'transcribing';
   error: string | null;
   notice: string | null;
   recovery: Recovery | null;
@@ -17,12 +17,14 @@ export interface SpeechSnapshot {
 interface Operation {
   identity: Identity; draft: ModuleDraft; revision: number; selection: Selection; text: string;
   controller: AbortController; release(): void; recording?: Recording; context?: string;
+  preparation?: RecordingPreparation; limited?: boolean;
 }
 export interface SpeechOptions {
   signal: AbortSignal;
   host: ReadonlyState<HostSnapshot>;
   chatWindow: ReadonlyState<ChatWindowSnapshot>;
-  record: StartRecording;
+  prepare: PrepareRecording;
+  ready(signal: AbortSignal): Promise<void>;
   transcribe: Transcribe;
   report(error: Error): void;
 }
@@ -47,7 +49,7 @@ export class SpeechService {
   constructor(options: SpeechOptions) {
     this.options = options;
     this.unsubscribe = options.host.subscribe(() => {
-      if (this.operation && !this.hostReady(this.operation.identity.sessionId)) this.cancel('Recording cancelled because the session or connection changed.');
+      if (this.operation && !this.hostReady(this.operation.identity.sessionId)) this.cancel('会话、页面可见性或连接已变化，语音输入已取消。');
     });
     options.signal.addEventListener('abort', this.dispose, { once: true });
     if (options.signal.aborted) this.dispose();
@@ -69,13 +71,13 @@ export class SpeechService {
     if (this.disposed) return;
     this.target = target;
     if (this.operation && (!matches(this.operation.identity, identity(target.draft)) || target.disabled || target.sendBlocked)) {
-      this.cancel('Recording cancelled because its input target changed or no longer accepts text.');
+      this.cancel('输入目标已变化或不再接受文字，语音输入已取消。');
     } else this.update({});
   }
   clearTarget(id: string): void {
     if (this.target?.draft.id !== id) return;
     this.target = null;
-    this.cancel('Recording cancelled because its input was closed.');
+    this.cancel('原输入框已关闭，语音输入已取消。');
   }
   canStart(): boolean {
     if (this.disposed || this.operation || this.state.recovery || !this.target) return false;
@@ -100,17 +102,25 @@ export class SpeechService {
       operation = {
         identity: identity(target.draft), draft: target.draft, revision: snapshot.revision,
         text: snapshot.text, selection: target.selection(), controller: new AbortController(),
-        release: target.draft.block('Speech recording or transcription is in progress.'),
+        release: target.draft.block('正在录音或转写，请完成后再发送。'),
         context,
       };
-    } catch { this.error(new SpeechError('DRAFT_UNAVAILABLE', 'This input can no longer accept a recording.')); return; }
+    } catch { this.error(new SpeechError('DRAFT_UNAVAILABLE', '当前输入框已无法接受语音输入。')); return; }
     this.operation = operation;
-    this.update({ phase: 'permission', error: null, notice: null });
+    this.update({ phase: 'checking', error: null, notice: null });
     try {
-      const recording = await this.options.record(operation.controller.signal, error => this.fail(operation, error));
+      operation.preparation = this.options.prepare(operation.controller.signal, error => this.fail(operation, error), () => {
+        operation.limited = true;
+        if (this.current(operation) && this.state.phase === 'recording') void this.stop();
+      });
+      await this.options.ready(operation.controller.signal);
+      if (!this.current(operation)) return;
+      this.update({ phase: 'permission' });
+      const recording = await operation.preparation.start();
       if (!this.current(operation)) { recording.cancel(); return; }
       operation.recording = recording;
       this.update({ phase: 'recording' });
+      if (operation.limited) void this.stop();
     } catch (error) { this.fail(operation, error); }
   }
   async stop(): Promise<void> {
@@ -130,13 +140,13 @@ export class SpeechService {
       try {
         if (!target || !matches(operation.identity, identity(target.draft)) || !this.writable(target)
           || target.draft.getSnapshot().revision !== operation.revision) {
-          this.update({ notice: 'Your draft changed or cannot accept text. The recognized text is retained below; copy it or explicitly insert it into the original input.' });
+          this.update({ notice: '草稿已修改或暂时无法写入。识别结果保留在下方，可复制或手动插入原输入框。' });
           return;
         }
         operation.draft.editText(insertText(operation.text, text, operation.selection));
-        this.update({ recovery: null, notice: 'Speech inserted into the draft. Review it before sending.' });
+        this.update({ recovery: null, notice: operation.limited ? '已到两分钟上限，自动停止并写入草稿。请检查后自行发送。' : '语音已写入草稿，请检查后自行发送。' });
       } catch {
-        this.error(new SpeechError('DRAFT_CONFLICT', 'The original input could not be edited. The recognized text is retained below.'));
+        this.error(new SpeechError('DRAFT_CONFLICT', '无法修改原输入框，识别结果已保留在下方。'));
       }
     } catch (error) { this.fail(operation, error); }
   }
@@ -152,22 +162,23 @@ export class SpeechService {
       // Explicit recovery inserts at the current caret, never deletes a user's selected text.
       const selection = target.selection();
       target.draft.editText(insertText(target.draft.getSnapshot().text, recovery.text, { start: selection.start, end: selection.start }));
-      this.update({ recovery: null, error: null, notice: 'Speech inserted into the original draft. Review it before sending.' });
-    } catch { this.error(new SpeechError('DRAFT_CONFLICT', 'The original input could not be edited. Copy the retained recognized text instead.')); }
+      this.update({ recovery: null, error: null, notice: '识别结果已插入原草稿，请检查后自行发送。' });
+    } catch { this.error(new SpeechError('DRAFT_CONFLICT', '无法修改原输入框，请复制已保留的识别结果。')); }
   }
   dismiss(): void {
     if (!this.operation) this.update({ recovery: null, error: null, notice: null });
   }
-  notifyCopyFailure(): void { this.error(new SpeechError('COPY_FAILED', 'Clipboard access failed. Select and copy the retained text manually.')); }
+  notifyCopyFailure(): void { this.error(new SpeechError('COPY_FAILED', '无法访问剪贴板，请手动选择并复制识别结果。')); }
   private error(error: unknown): void {
-    const safe = error instanceof SpeechError ? error : new SpeechError('SPEECH_FAILED', 'Speech recording or transcription failed. Try again when ready.');
+    const safe = error instanceof SpeechError ? error : new SpeechError('SPEECH_FAILED', '录音或转写失败，请稍后重试。');
     this.update({ error: safe.message });
-    this.options.report(new Error(safe.message));
+    if (!(error instanceof SpeechError)) this.options.report(new Error(safe.message));
   }
   private finish(operation: Operation): void {
     if (this.operation !== operation) return;
     this.operation = null;
     operation.controller.abort();
+    operation.preparation?.cancel();
     operation.recording?.cancel();
     try { operation.release(); } catch { /* Revocation already releases the module's leases. */ }
   }
@@ -177,7 +188,7 @@ export class SpeechService {
     this.update({ phase: 'idle' });
     this.error(error);
   }
-  cancel(notice = 'Speech recording or transcription cancelled.'): void {
+  cancel(notice = '语音输入已取消。'): void {
     if (!this.operation) return;
     this.finish(this.operation);
     this.update({ phase: 'idle', notice, error: null });

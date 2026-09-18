@@ -49,11 +49,12 @@ chmod 600 ~/.cockpit/modules/data/cockpit-speech/azure-speech.json
 
 For a nondefault `COCKPIT_HOME`, use the actual host-supplied module data directory
 instead. The file must be a bounded regular, non-symlink UTF-8 JSON file (16 KiB
-maximum). Missing/malformed configuration and authentication errors appear in
-the speech UI. Correct the file and explicitly record again; there is no
+maximum). Missing/malformed configuration is checked **before microphone permission or
+capture**, and errors appear directly in the speech UI. Provider authentication
+errors appear when Azure processes a recording. Correct the file and explicitly record again; there is no
 environment-variable fallback, initialization UI, automatic retry, or key
 readback. Activation does not require the file. The read-only `/config-ready`
-module route validates file readiness only, not provider authentication, and
+module route is called on every recording attempt. It validates file readiness only, not provider authentication, and
 never returns the key or endpoint. A failed recording is not silently retried.
 
 ## Privacy and context
@@ -100,15 +101,17 @@ MediaRecorder MP4-container assumptions and third-party codecs. Browser/device
 support and real microphone permissions still need validation on your devices.
 
 Maximum recording duration is **120 seconds**, with a hard sample-count and
-wall-clock cap. Exceeding the limit fails explicitly and discards the recording,
-rather than silently truncating or sending it. PCM capture holds up to 7.68 MB
+wall-clock cap. Reaching either limit automatically stops recording and transcribes
+the audio already captured, including the final partial buffer. It does not
+discard the recording or submit a native message. PCM capture holds up to 7.68 MB
 of float samples, plus the 3.84 MB WAV and bounded encoding/request copies.
 Backend limits are 10 MiB decoded audio and 15 MiB JSON; it additionally requires
 the module's canonical WAV format and 120-second bound. Azure response bodies
 are limited to 1 MiB, recognized text to 100,000 code points, and provider time
 to 90 seconds. One backend transcription runs at a time. No automatic retries.
 
-Recording captures exact draft lifetime, session, purpose, text revision and
+The click unlocks Web Audio synchronously, but microphone acquisition waits for
+the cancellable configuration check. Recording captures exact draft lifetime, session, purpose, text revision and
 selection. A draft lease blocks native sending during capture/transcription.
 Cancellation, input replacement, navigation, disconnect, hiding the page,
 unmount and module abort release resources and the lease; a late permission

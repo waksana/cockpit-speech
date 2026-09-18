@@ -13,7 +13,7 @@ test('config accepts only exact fields and a public Azure resource origin', () =
     'https://user@x.cognitiveservices.azure.com', 'https://x.cognitiveservices.azure.com.evil.invalid',
     'https://localhost', 'https://127.0.0.1', 'https://x.api.cognitive.microsoft.com',
     'https://-x.cognitiveservices.azure.com', 'https://x-.cognitiveservices.azure.com']) {
-    assert.throws(() => parseConfig({ ...config, endpoint }), /endpoint must/);
+    assert.throws(() => parseConfig({ ...config, endpoint }), { code: 'CONFIG_ENDPOINT' });
   }
   for (const invalid of [{}, null, [], { ...config, other: true }, { ...config, key: '' },
     { ...config, key: 'a\nb' }, { ...config, key: 'secret ' }, { endpoint: 1, key: 'test' }]) {
@@ -25,7 +25,7 @@ test('config is reread, bounded, non-symlink and never exposes its bytes on erro
   await mkdir(root, { recursive: true });
   const path = join(root, 'azure-speech.json');
   try {
-    await assert.rejects(readConfig(root), /azure-speech.json.*endpoint and key/);
+    await assert.rejects(readConfig(root), /azure-speech.json.*endpoint.*key/);
     await writeFile(path, JSON.stringify(config), { mode: 0o600 });
     assert.equal((await readConfig(root)).key, config.key);
     await writeFile(path, JSON.stringify({ ...config, key: 'updated-synthetic-test-key' }));
@@ -39,9 +39,9 @@ test('config is reread, bounded, non-symlink and never exposes its bytes on erro
     await rm(path);
     await writeFile(join(root, 'linked.json'), JSON.stringify(config));
     await symlink('linked.json', path);
-    await assert.rejects(readConfig(root), /non-symlink/);
+    await assert.rejects(readConfig(root), { code: 'CONFIG_UNAVAILABLE' });
     await rm(path);
     await mkdir(path);
-    await assert.rejects(readConfig(root), /regular/);
+    await assert.rejects(readConfig(root), { code: 'CONFIG_UNAVAILABLE' });
   } finally { await rm(root, { recursive: true, force: true }); }
 });

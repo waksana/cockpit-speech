@@ -1,9 +1,9 @@
 import type { ActivateFrontend, ComposerEditorProps } from '@cockpit/module-api';
 import type { Ref } from 'react';
 import { icons } from './icons.ts';
-import { startRecording } from './recorder.ts';
+import { prepareRecording } from './recorder.ts';
 import { SpeechService } from './speech.ts';
-import { transcriptionClient } from './transport.ts';
+import { readinessClient, transcriptionClient } from './transport.ts';
 
 export function composeEditorRef(local: { current: HTMLTextAreaElement | null }, inherited?: Ref<HTMLTextAreaElement>): (node: HTMLTextAreaElement | null) => void | (() => void) {
   return node => {
@@ -18,7 +18,7 @@ export function composeEditorRef(local: { current: HTMLTextAreaElement | null },
 export const activate: ActivateFrontend = context => {
   if (context.apiVersion !== 2 || context.uiVersion !== 1 || context.chatWindowVersion !== 1
     || context.composerActionsVersion !== 1 || !context.state?.chatWindow || !context.state.bindDraft) {
-    throw new Error('Cockpit Speech requires frontend API v2, UI v1, chatWindow v1 and composerActions v1. Upgrade to the paired host SDK first.');
+    throw new Error('语音模块需要前端 API v2、UI v1、chatWindow v1 和 composerActions v1，请先升级配套宿主。');
   }
   const React = context.react;
   const h = React.createElement;
@@ -26,7 +26,8 @@ export const activate: ActivateFrontend = context => {
     id: 'speech',
     create: () => new SpeechService({
       signal: context.signal, host: context.state.host, chatWindow: context.state.chatWindow,
-      record: startRecording, transcribe: transcriptionClient(context.request), report: context.report,
+      prepare: prepareRecording, ready: readinessClient(context.request),
+      transcribe: transcriptionClient(context.request), report: context.report,
     }),
     dispose: service => service.dispose(),
   }).get();
@@ -57,35 +58,36 @@ export const activate: ActivateFrontend = context => {
           return () => speech.clearTarget(draft.id);
         }, [draft, props.disabled, props.sendBlocked, selection]);
         const active = state.phase !== 'idle';
-        const label = state.phase === 'recording' ? 'Stop recording and transcribe'
-          : active ? 'Cancel speech recording or transcription' : 'Record speech';
+        const label = state.phase === 'recording' ? '停止录音并转写'
+          : active ? '取消语音输入' : '开始语音输入';
         const disabled = !active && (props.disabled || props.sendBlocked || !speech.canStart());
         const button = h('button', {
           type: 'button', className: 'ck-icon-button cockpit-speech-mic', disabled,
           'aria-label': label, title: label, 'aria-pressed': active,
           onClick: () => { if (state.phase === 'recording') void speech.stop(); else if (active) speech.cancel(); else void speech.start(); },
         }, h(Icon, { name: active ? 'square' : 'mic' }));
-        const progress = state.phase === 'permission' ? 'Waiting for microphone permission…'
-          : state.phase === 'recording' ? 'Recording. Stop to transcribe (maximum 120 seconds).'
-          : state.phase === 'stopping' ? 'Finalizing audio…' : state.phase === 'transcribing' ? 'Transcribing with Azure Speech…' : state.notice;
+        const progress = state.phase === 'checking' ? '正在检查语音配置…'
+          : state.phase === 'permission' ? '等待麦克风权限…'
+            : state.phase === 'recording' ? '正在录音，点击停止后转写；两分钟后自动停止并转写。'
+              : state.phase === 'stopping' ? '正在整理录音…' : state.phase === 'transcribing' ? '正在通过 Azure Speech 转写…' : state.notice;
         const recovery = state.recovery;
-        const panel = (active || state.error || state.notice || recovery) ? h('section', { className: 'cockpit-speech-panel', 'aria-label': 'Speech recording' },
+        const panel = (active || state.error || state.notice || recovery) ? h('section', { className: 'cockpit-speech-panel', 'aria-label': '语音输入' },
           state.error ? h('p', { role: 'alert' }, state.error) : null,
           progress ? h('p', { role: 'status', 'aria-live': 'polite' }, progress) : null,
-          active ? h('button', { type: 'button', className: 'ck-button', onClick: () => speech.cancel() }, 'Cancel speech') : null,
+          active ? h('button', { type: 'button', className: 'ck-button', onClick: () => speech.cancel() }, '取消语音输入') : null,
           recovery ? h(React.Fragment, null,
-            h('label', null, 'Recognized text (not sent)', h('textarea', { className: 'ck-input', value: recovery.text, readOnly: true, rows: 4 })),
+            h('label', null, '识别结果（未发送）', h('textarea', { className: 'ck-input', value: recovery.text, readOnly: true, rows: 4 })),
             h('div', { className: 'cockpit-speech-recovery-actions' },
               h('button', { type: 'button', className: 'ck-button', onClick: () => {
                 void (async () => {
                   try { await navigator.clipboard.writeText(recovery.text); }
                   catch { speech.notifyCopyFailure(); }
                 })();
-              } }, 'Copy text'),
-              h('button', { type: 'button', className: 'ck-button', disabled: !speech.canInsert(), onClick: () => speech.insertRecovery() }, 'Insert at current cursor'),
+              } }, '复制文字'),
+              h('button', { type: 'button', className: 'ck-button', disabled: !speech.canInsert(), onClick: () => speech.insertRecovery() }, '插入原输入框光标处'),
             ),
           ) : null,
-          !active ? h('button', { type: 'button', className: 'ck-button', onClick: () => speech.dismiss() }, recovery ? 'Discard recognized text' : 'Dismiss') : null,
+          !active ? h('button', { type: 'button', className: 'ck-button', onClick: () => speech.dismiss() }, recovery ? '丢弃识别结果' : '关闭提示') : null,
         ) : null;
         return h(React.Fragment, null,
           h(Base, { ...props, editorRef: ref, actions: h(React.Fragment, null, props.actions, button) }),

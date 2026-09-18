@@ -37,7 +37,7 @@ function draft(id = 'draft-1', purpose: DraftPurpose = { kind: 'prompt' }): Modu
     },
   };
 }
-function fixture(options: { permission?: boolean; purpose?: DraftPurpose } = {}) {
+function fixture(options: { permission?: boolean; purpose?: DraftPurpose; ready?: (signal: AbortSignal) => Promise<void> } = {}) {
   const host = store<HostSnapshot>({ sessionId: 's', visible: true, connected: true });
   const chatWindow = store<ChatWindowSnapshot>({
     sessionId: 's', status: 'ready', hasMore: false, partial: false,
@@ -51,6 +51,10 @@ function fixture(options: { permission?: boolean; purpose?: DraftPurpose } = {})
   let cancelled = 0;
   let stops = 0;
   let requests = 0;
+  let captures = 0;
+  let preparationsCancelled = 0;
+  let readyCalls = 0;
+  let limitReached!: () => void;
   let capturedContext: string | undefined;
   let capturedSignal: AbortSignal | undefined;
   let recorderFailure!: (error: SpeechError) => void;
@@ -60,13 +64,21 @@ function fixture(options: { permission?: boolean; purpose?: DraftPurpose } = {})
   };
   const service = new SpeechService({
     signal: controller.signal, host, chatWindow,
-    record: async (_signal, fail) => { recorderFailure = fail; return options.permission ? permission.promise : recording; },
+    prepare: (_signal, fail, limit) => {
+      recorderFailure = fail; limitReached = limit;
+      return {
+        start: async () => { captures++; return options.permission ? permission.promise : recording; },
+        cancel: () => { preparationsCancelled++; },
+      };
+    },
+    ready: async signal => { readyCalls++; await options.ready?.(signal); },
     transcribe: async (_audio, context, signal) => { requests++; capturedContext = context; capturedSignal = signal; return result.promise; },
     report: error => reports.push(error),
   });
   service.setTarget({ draft: original, disabled: false, sendBlocked: false, selection: () => ({ start: 6, end: 11 }) });
   return { service, host, chatWindow, original, permission, result, controller, reports, recording,
-    values: () => ({ cancelled, stops, requests, capturedContext, capturedSignal }), fail: (e: SpeechError) => recorderFailure(e) };
+    values: () => ({ cancelled, stops, requests, captures, preparationsCancelled, readyCalls, capturedContext, capturedSignal }),
+    limit: () => limitReached(), fail: (e: SpeechError) => recorderFailure(e) };
 }
 test('prompt, ask and plan insert at the captured selection only after stop; context is captured once', async t => {
   for (const purpose of [{ kind: 'prompt' }, { kind: 'ask', requestId: 'a' }, { kind: 'plan', requestId: 'p' }] as const) {
@@ -116,6 +128,7 @@ test('permission late grants are cancelled after input loss or module abort, wit
   for (const cause of ['unmount', 'navigation', 'abort', 'no-free-text', 'replacement'] as const) {
     const f = fixture({ permission: true }); t.after(() => f.service.dispose());
     const starting = f.service.start();
+    await new Promise<void>(resolve => setImmediate(resolve));
     assert.equal(f.service.getSnapshot().phase, 'permission');
     if (cause === 'unmount') f.service.clearTarget(f.original.id);
     if (cause === 'navigation') f.host.set({ ...f.host.getSnapshot(), sessionId: 'other' });
@@ -151,9 +164,61 @@ test('recorder and HTTP failures release leases and report one safe visible erro
     assert.equal(f.original.getSnapshot().blocks.length, 0);
     assert.equal(f.service.getSnapshot().phase, 'idle');
     assert.ok(f.service.getSnapshot().error);
-    assert.equal(f.reports.length, 1);
-    assert.doesNotMatch(f.reports[0]!.message, /PRIVATE/);
+    assert.equal(f.reports.length, failure === 'http' ? 1 : 0, 'known errors are shown inline without a duplicate global alert');
+    assert.doesNotMatch(f.service.getSnapshot().error!, /PRIVATE/);
   }
+});
+
+test('configuration readiness gates capture, retries explicitly, and preserves click-time draft identity', async t => {
+  let configured = false;
+  const f = fixture({ ready: async () => {
+    if (!configured) throw new SpeechError('CONFIG_UNAVAILABLE', '请创建 azure-speech.json。');
+  } });
+  t.after(() => f.service.dispose());
+  await f.service.start();
+  assert.match(f.service.getSnapshot().error!, /azure-speech\.json/);
+  assert.equal(f.values().captures, 0);
+  assert.equal(f.values().requests, 0);
+  assert.equal(f.values().preparationsCancelled, 1);
+  assert.equal(f.original.getSnapshot().blocks.length, 0);
+  configured = true;
+  await f.service.start();
+  assert.equal(f.values().readyCalls, 2);
+  assert.equal(f.values().captures, 1);
+  assert.equal(f.service.getSnapshot().phase, 'recording');
+});
+
+test('cancellation during readiness never acquires the microphone, even if readiness completes late', async t => {
+  const ready = deferred<void>();
+  let signal!: AbortSignal;
+  const f = fixture({ ready: value => { signal = value; return ready.promise; } });
+  t.after(() => f.service.dispose());
+  const starting = f.service.start();
+  assert.equal(f.service.getSnapshot().phase, 'checking');
+  f.service.cancel();
+  assert.equal(signal.aborted, true);
+  ready.resolve();
+  await starting;
+  assert.equal(f.values().captures, 0);
+  assert.equal(f.values().requests, 0);
+  assert.equal(f.original.getSnapshot().blocks.length, 0);
+});
+
+test('reaching the recording limit automatically transcribes once without native submission or lost audio', async t => {
+  const f = fixture();
+  t.after(() => f.service.dispose());
+  await f.service.start();
+  f.limit();
+  f.limit();
+  await f.service.stop();
+  f.result.resolve('bounded speech');
+  await new Promise<void>(resolve => setImmediate(resolve));
+  assert.equal(f.values().stops, 1);
+  assert.equal(f.values().requests, 1);
+  assert.equal(f.original.getSnapshot().text, 'hello bounded speech');
+  assert.equal(f.original.getSnapshot().blocks.length, 0);
+  assert.equal(f.service.getSnapshot().phase, 'idle');
+  assert.match(f.service.getSnapshot().notice!, /两分钟/);
 });
 test('pending, unconfirmed, peer blocks and free-text gates prevent capture and recovery insertion', async t => {
   const f = fixture(); t.after(() => f.service.dispose());

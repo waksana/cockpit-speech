@@ -25,7 +25,7 @@ test('frontend requires additive capabilities rather than assuming them from API
     assert.throws(() => activate({
       apiVersion: 2, uiVersion: 1, chatWindowVersion: 1, composerActionsVersion: 1,
       state: { chatWindow: {}, bindDraft() {} }, ...patch,
-    } as unknown as ModuleFrontendContext), /paired host/);
+    } as unknown as ModuleFrontendContext), /配套宿主/);
   }
 });
 
@@ -90,7 +90,7 @@ test('editor middleware preserves inherited native props/actions/children and ke
       assert.equal(actions.children[0], inheritedActions);
       const mic = actions.children[1] as Element;
       assert.equal(mic.type, 'button'); assert.equal(mic.props.type, 'button');
-      assert.equal(mic.props['aria-label'], 'Record speech');
+      assert.equal(mic.props['aria-label'], '开始语音输入');
       assert.equal(mic.props.disabled, sendBlocked);
       effects.pop()!();
     }

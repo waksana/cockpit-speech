@@ -10,7 +10,7 @@ export function activate(context: ModuleBackendContext, transcriber: Transcriber
     status, headers: { 'Cache-Control': 'no-store', 'Content-Type': 'application/json' }, body,
   });
   const failure = (error: unknown): ModuleResponse => {
-    const safe = error instanceof SpeechError ? error : new SpeechError('SPEECH_FAILED', 'Speech transcription failed.', 500);
+    const safe = error instanceof SpeechError ? error : new SpeechError('SPEECH_FAILED', '语音转写失败。', 500);
     return json({ error: { code: safe.code, message: safe.message } }, safe.status);
   };
   let active = false;
@@ -26,7 +26,7 @@ export function activate(context: ModuleBackendContext, transcriber: Transcriber
       {
         method: 'POST', path: '/transcribe', body: 'json', bodyLimit: MAX_JSON_BYTES,
         async handler(request) {
-          if (active) return failure(new SpeechError('SPEECH_BUSY', 'A speech transcription is already running. Try again after it finishes.', 409));
+          if (active) return failure(new SpeechError('SPEECH_BUSY', '已有语音正在转写，请等待完成后重试。', 409));
           active = true;
           try {
             const signal = AbortSignal.any([request.signal, context.signal, lifetime.signal]);
@@ -38,7 +38,7 @@ export function activate(context: ModuleBackendContext, transcriber: Transcriber
             signal.throwIfAborted();
             return json({ text });
           } catch (error) {
-            if (request.signal.aborted || context.signal.aborted || lifetime.signal.aborted) return failure(new SpeechError('CANCELLED', 'Speech transcription was cancelled.', 499));
+            if (request.signal.aborted || context.signal.aborted || lifetime.signal.aborted) return failure(new SpeechError('CANCELLED', '语音转写已取消。', 499));
             return failure(error);
           } finally { active = false; }
         },

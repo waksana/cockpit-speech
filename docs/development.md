@@ -31,7 +31,11 @@ reuse another project's dependencies.
 
 - WAV encoding/header/data/size validation and actual worklet downmix/flush/limit.
 - Audio environment lifecycle, late permission grants, stream/context/port
-  cleanup, unsupported rates, processor and duration-limit failures.
+  cleanup, gesture preparation without capture, unsupported rates and processor failures.
+- Missing configuration and cancelled readiness never acquire the microphone;
+  an explicit retry rereads configuration without reactivation.
+- Both sample-count and wall-clock limits preserve/finalize audio and trigger
+  transcription once, including a racing manual stop and the final partial buffer.
 - Ready vs stale/unavailable/partial context; roots, provenance, subtypes,
   incompletion, session boundaries and code-point clipping.
 - Prompt/ask/plan draft capture, exact selection and context timing; manual edit
