@@ -59,20 +59,24 @@ function fixture(options: { permission?: boolean; purpose?: DraftPurpose; ready?
   let capturedSignal: AbortSignal | undefined;
   let recorderFailure!: (error: SpeechError) => void;
   const recording: Recording = {
-    stop: async () => { stops++; return new Uint8Array([1]); },
+    stop: async committed => { stops++; requests++; committed?.(); return result.promise; },
     cancel: () => { cancelled++; },
   };
   const service = new SpeechService({
     signal: controller.signal, host, chatWindow,
-    prepare: (_signal, fail, limit) => {
+    prepare: (signal, fail, limit) => {
+      capturedSignal = signal;
       recorderFailure = fail; limitReached = limit;
       return {
         start: async () => { captures++; return options.permission ? permission.promise : recording; },
         cancel: () => { preparationsCancelled++; },
       };
     },
-    ready: async signal => { readyCalls++; await options.ready?.(signal); },
-    transcribe: async (_audio, context, signal) => { requests++; capturedContext = context; capturedSignal = signal; return result.promise; },
+    session: async (context, signal) => {
+      readyCalls++; capturedContext = context;
+      await options.ready?.(signal);
+      return { clientSecret: 'ephemeral-fixture', expiresAt: 2_000_000_000, callsUrl: 'https://synthetic.openai.azure.com/openai/v1/realtime/calls' };
+    },
     report: error => reports.push(error),
   });
   service.setTarget({ draft: original, disabled: false, sendBlocked: false, selection: () => ({ start: 6, end: 11 }) });
@@ -97,6 +101,9 @@ test('prompt, ask and plan insert at the captured selection only after stop; con
     assert.equal(f.original.getSnapshot().blocks.length, 0);
     assert.equal(f.values().capturedContext, 'initial context');
     assert.equal(f.service.getSnapshot().recovery, null);
+    assert.deepEqual(f.service.getSnapshot().focus, {
+      id: f.original.id, revision: f.original.getSnapshot().revision, selection: { start: 12, end: 12 },
+    });
   }
 });
 test('manual revisions win and successful text remains recoverable; explicit insertion preserves selection', async t => {
@@ -112,12 +119,14 @@ test('manual revisions win and successful text remains recoverable; explicit ins
   f.service.insertRecovery();
   assert.equal(f.original.getSnapshot().text, 'manualrecognized words');
   assert.equal(f.service.getSnapshot().recovery, null);
+  assert.deepEqual(f.service.getSnapshot().focus?.selection, { start: 16, end: 16 });
 });
 test('a recovered result never redirects to another draft, including reused native request IDs', async t => {
   const f = fixture({ purpose: { kind: 'ask', requestId: 'reused' } }); t.after(() => f.service.dispose());
   await f.service.start(); f.original.editText('manual');
   const stopped = f.service.stop(); f.result.resolve('recognized'); await stopped;
   f.service.clearTarget(f.original.id);
+  assert.equal(f.service.getSnapshot().focus, null);
   assert.equal(f.service.getSnapshot().recovery?.text, 'recognized');
   const replacement = draft('different-lifetime', { kind: 'ask', requestId: 'reused' });
   f.service.setTarget({ draft: replacement, disabled: false, sendBlocked: false, selection: () => ({ start: 0, end: 0 }) });
@@ -160,7 +169,7 @@ test('permission late grants are cancelled after input loss or module abort, wit
     assert.equal(f.service.getSnapshot().phase, 'idle', cause);
   }
 });
-test('cancelled HTTP completion never writes to the original or replacement draft', async t => {
+test('cancelled transcription completion never writes to the original or replacement draft', async t => {
   const f = fixture(); t.after(() => f.service.dispose());
   await f.service.start();
   const stop = f.service.stop(); await Promise.resolve();
@@ -171,7 +180,7 @@ test('cancelled HTTP completion never writes to the original or replacement draf
   assert.equal(f.service.getSnapshot().recovery, null);
   assert.equal(f.original.getSnapshot().blocks.length, 0);
 });
-test('recorder and HTTP failures release leases and report one safe visible error', async t => {
+test('recorder and transcription failures release leases and report one safe visible error', async t => {
   for (const failure of ['recorder', 'http']) {
     const f = fixture(); t.after(() => f.service.dispose());
     await f.service.start();
@@ -190,11 +199,11 @@ test('recorder and HTTP failures release leases and report one safe visible erro
 test('configuration readiness gates capture, retries explicitly, and preserves click-time draft identity', async t => {
   let configured = false;
   const f = fixture({ ready: async () => {
-    if (!configured) throw new SpeechError('CONFIG_UNAVAILABLE', '请创建 azure-speech.json。');
+    if (!configured) throw new SpeechError('CONFIG_UNAVAILABLE', '请创建 azure-openai.json。');
   } });
   t.after(() => f.service.dispose());
   await f.service.start();
-  assert.match(f.service.getSnapshot().error!, /azure-speech\.json/);
+  assert.match(f.service.getSnapshot().error!, /azure-openai\.json/);
   assert.equal(f.values().captures, 0);
   assert.equal(f.values().requests, 0);
   assert.equal(f.values().preparationsCancelled, 1);

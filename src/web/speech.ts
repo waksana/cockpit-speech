@@ -2,7 +2,7 @@ import type { ChatWindowSnapshot, DraftPurpose, HostSnapshot, ModuleDraft, Reado
 import { SpeechError } from '../shared/limits.ts';
 import { recentContext } from './context.ts';
 import type { Recording, RecordingPreparation, PrepareRecording } from './recorder.ts';
-import type { Transcribe } from './transport.ts';
+import type { CreateSession } from './transport.ts';
 
 export interface Selection { start: number; end: number }
 export interface Target { draft: ModuleDraft; disabled: boolean; sendBlocked: boolean; selection(): Selection }
@@ -13,6 +13,7 @@ export interface SpeechSnapshot {
   error: string | null;
   notice: string | null;
   recovery: Recovery | null;
+  focus: { id: string; revision: number; selection: Selection } | null;
 }
 interface Operation {
   identity: Identity; draft: ModuleDraft; revision: number; selection: Selection; text: string;
@@ -24,8 +25,7 @@ export interface SpeechOptions {
   host: ReadonlyState<HostSnapshot>;
   chatWindow: ReadonlyState<ChatWindowSnapshot>;
   prepare: PrepareRecording;
-  ready(signal: AbortSignal): Promise<void>;
-  transcribe: Transcribe;
+  session: CreateSession;
   report(error: Error): void;
 }
 const purposeKey = (purpose: DraftPurpose) => purpose.kind === 'prompt' ? 'prompt' : `${purpose.kind}:${purpose.requestId}`;
@@ -39,7 +39,7 @@ export function insertText(text: string, addition: string, selection: Selection)
 }
 
 export class SpeechService {
-  private state: SpeechSnapshot = { phase: 'idle', error: null, notice: null, recovery: null };
+  private state: SpeechSnapshot = { phase: 'idle', error: null, notice: null, recovery: null, focus: null };
   private readonly listeners = new Set<() => void>();
   private target: Target | null = null;
   private operation: Operation | null = null;
@@ -77,8 +77,14 @@ export class SpeechService {
   clearTarget(id: string): void {
     if (this.target?.draft.id !== id) return;
     this.target = null;
+    this.update({ focus: null });
     if (this.operation) this.cancel('原输入框已关闭，语音输入已取消。');
     else if (!this.state.recovery) this.update({ error: null, notice: null });
+  }
+  focusTarget(selection?: Selection): void {
+    const target = this.target;
+    if (!target || target.disabled || !this.hostReady(target.draft.sessionId)) return;
+    this.update({ focus: { id: target.draft.id, revision: target.draft.getSnapshot().revision, selection: selection ?? target.selection() } });
   }
   canStart(): boolean {
     if (this.disposed || this.operation || this.state.recovery || !this.target) return false;
@@ -108,16 +114,16 @@ export class SpeechService {
       };
     } catch { this.error(new SpeechError('DRAFT_UNAVAILABLE', '当前输入框已无法接受语音输入。')); return; }
     this.operation = operation;
-    this.update({ phase: 'checking', error: null, notice: null });
+    this.update({ phase: 'checking', error: null, notice: null, focus: null });
     try {
       operation.preparation = this.options.prepare(operation.controller.signal, error => this.fail(operation, error), () => {
         operation.limited = true;
         if (this.current(operation) && this.state.phase === 'recording') void this.stop();
       });
-      await this.options.ready(operation.controller.signal);
+      const session = await this.options.session(operation.context, operation.controller.signal);
       if (!this.current(operation)) return;
       this.update({ phase: 'permission' });
-      const recording = await operation.preparation.start();
+      const recording = await operation.preparation.start(session);
       if (!this.current(operation)) { recording.cancel(); return; }
       operation.recording = recording;
       this.update({ phase: 'recording' });
@@ -129,10 +135,9 @@ export class SpeechService {
     if (!operation?.recording || this.state.phase !== 'recording') return;
     this.update({ phase: 'stopping' });
     try {
-      const audio = await operation.recording.stop();
-      if (!this.current(operation)) return;
-      this.update({ phase: 'transcribing' });
-      const text = await this.options.transcribe(audio, operation.context, operation.controller.signal);
+      const text = await operation.recording.stop(() => {
+        if (this.current(operation)) this.update({ phase: 'transcribing' });
+      });
       if (!this.current(operation)) return;
       this.finish(operation);
       const recovery = { ...operation.identity, text };
@@ -145,6 +150,8 @@ export class SpeechService {
           return;
         }
         operation.draft.editText(insertText(operation.text, text, operation.selection));
+        const caret = Math.max(0, Math.min(operation.text.length, operation.selection.start)) + text.length;
+        this.focusTarget({ start: caret, end: caret });
         this.update({ recovery: null, notice: operation.limited ? '已到两分钟上限，自动停止并写入草稿。请检查后自行发送。' : '语音已写入草稿，请检查后自行发送。' });
       } catch {
         this.error(new SpeechError('DRAFT_CONFLICT', '无法修改原输入框，识别结果已保留在下方。'));
@@ -163,6 +170,8 @@ export class SpeechService {
       // Explicit recovery inserts at the current caret, never deletes a user's selected text.
       const selection = target.selection();
       target.draft.editText(insertText(target.draft.getSnapshot().text, recovery.text, { start: selection.start, end: selection.start }));
+      const caret = selection.start + recovery.text.length;
+      this.focusTarget({ start: caret, end: caret });
       this.update({ recovery: null, error: null, notice: '识别结果已插入原草稿，请检查后自行发送。' });
     } catch { this.error(new SpeechError('DRAFT_CONFLICT', '无法修改原输入框，请复制已保留的识别结果。')); }
   }

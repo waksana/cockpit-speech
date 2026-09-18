@@ -1,0 +1,82 @@
+# Cockpit Speech 0.1.1
+
+Unreleased paired migration for [waksana/cockpit#51](https://github.com/waksana/cockpit/issues/51).
+No tag, Release, installation or deployment is performed by this source change.
+
+## Breaking host pairing
+
+Requires Cockpit 0.2.5 source with `composerInputVersion: 1`, independently of
+Web API v2, UI v1 and `chatWindowVersion: 1`. Removes the previous Composer actions
+contract completely, without aliases or compatibility fallbacks.
+
+The SDK is exported from reachable host commit
+`d752dd6a016f8ff84235c4cd8850e2b63778bf1b`, module-api/protocol version 0.2.5.
+`tooling/host-sdk.json`, generated SDK inventory, lockfile and package build receipt
+bind the pairing. Merge the host API before this consumer; old Speech 0.1.0 and
+hosts without the real input capability cannot be mixed with it.
+
+## Input composition and lifecycle
+
+Speech wraps the actual controlled textarea Base, preserving native events and
+the public ref, and adds a microphone sibling before the independent native send.
+File remains prompt-only and on the left; prompt/ask/plan microphones remain
+visible, and native free-text restrictions still disable recording.
+
+The existing composer boundary puts status/error/recovery after the entire row,
+with bounded scrolling on short screens. There are no private DOM queries, visual
+reordering, nested controls, duplicate editors or new host slots.
+
+Successful insertion restores the original input's focus and caret only for its
+exact draft lifetime and revision. Lifecycle cancellation does not
+redirect late results. Draft leases, manual-edit conflicts, reused request IDs
+and recovery remain bound to the captured lifetime.
+
+Context remains the newest eligible completed root assistant reply captured at
+record click. The excerpt now takes its **last 1,000 Unicode code points** after
+trimming, instead of the first 200; shorter replies stay whole. Frontend selection
+and backend validation use the same limit. This is module policy, not an Azure
+maximum, and does not add history reads or change message eligibility.
+
+## Breaking provider/configuration migration
+
+Following the user's explicit provider decision, the same unreleased 0.1.1 now
+uses Azure OpenAI **gpt-transcribe over browser-direct WebRTC**, not Azure LLM
+Speech file transcription. Deploy gpt-transcribe and create `azure-openai.json`
+with exactly `endpoint`, `key`, and `deployment`. The endpoint is the Azure
+OpenAI resource origin. The old `azure-speech.json` is not read or migrated.
+
+The only module route is `POST /session`. It exchanges the server-held key for
+a short-lived credential and returns it to the browser; no Entra business
+authentication is required. Audio/transcripts no longer pass through Cockpit.
+The old `/config-ready` and audio-upload `/transcribe` routes are removed.
+Context is sent when requesting credentials, and audio is sent during recording:
+cancel stops further transmission but cannot retract data or provider charges.
+
+The same 1,000-code-point excerpt accompanies pure-transcription session
+configuration. Its short reference label keeps the complete prompt at 1,022
+code points, within Azure's 1,024-code-point limit. Recording still ends after
+120 seconds and commits once; final
+text is inserted only after stop, never auto-sent. It is not a duplex assistant
+or live-caption mode. A new connection per operation plus committed-item
+correlation protects against stale completions. WAV buffering, the fixed 16 kHz
+requirement and the packaged PCM worklet are removed.
+
+This provider change requires no new host API or SDK pin, and does not change
+the already-selected unreleased versions (host 0.2.5 / Speech 0.1.1).
+Synthetic checks do not establish real microphone/browser-device support, Azure
+availability, credentials or recognition quality.
+
+## Review follow-up: preparation failures and button semantics
+
+Monitor track termination immediately after permission and AudioContext state
+from creation, without treating normal initial resume as failure. Recheck live
+audio tracks and running context before admission; preparation failure releases
+hardware, WebRTC, timers and the original draft lease instead of claiming recording.
+Microphone tracks stay disabled during setup. The 30-second setup deadline now
+also includes permission/resume, so unanswered permission cannot spin forever.
+
+The circular button retains one size: microphone -> disabled spinner -> stop ->
+disabled spinner -> microphone. No timer, adjacent phase copy, red retry mode or
+busy-click cancellation; accurate accessible names and busy/disabled states remain.
+Errors and conflict recovery retain the existing panel. There is no new audio
+cache, upload fallback, replay or automatic send.

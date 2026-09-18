@@ -22,8 +22,15 @@ test('context takes only newest eligible root, with native origin, no inferred c
   ]);
   assert.equal(recentContext(host, window, 's'), 'eligible 😀');
 });
-test('context is optional, clipped by Unicode codepoint, never fetched or taken from a stale window', () => {
-  assert.equal(recentContext(host, snapshot([message('😀'.repeat(201))]), 's'), '😀'.repeat(200));
+test('context keeps the last 1,000 Unicode code points without splitting supplementary characters', () => {
+  const tail = '😀'.repeat(995) + '末尾end';
+  assert.equal([...tail].length, 1_000);
+  assert.equal(recentContext(host, snapshot([message(`discard this prefix${tail}`)]), 's'), tail);
+  assert.equal(recentContext(host, snapshot([message(`  ${tail}  `)]), 's'), tail);
+  assert.equal(recentContext(host, snapshot([message('a'.repeat(1_000) + 'z')]), 's'), 'a'.repeat(999) + 'z');
+  assert.equal(recentContext(host, snapshot([message(' short reply 😀 ')]), 's'), 'short reply 😀');
+});
+test('context is optional, never fetched or taken from a stale window', () => {
   for (const status of ['unavailable', 'loading', 'stale', 'error'] as const) {
     assert.equal(recentContext(host, snapshot([message('x')], { status }), 's'), undefined);
   }

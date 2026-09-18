@@ -1,10 +1,10 @@
 import type { ModuleBackend, ModuleBackendContext, ModuleResponse } from '@cockpit/module-api';
 import { MAX_JSON_BYTES, SpeechError } from '../shared/limits.ts';
-import { azureTranscriber, parseInput } from './azure.ts';
-import type { Transcriber } from './azure.ts';
+import { azureSessionIssuer, parseInput } from './azure.ts';
+import type { SessionIssuer } from './azure.ts';
 import { readConfig } from './config.ts';
 
-export function activate(context: ModuleBackendContext, transcriber: Transcriber = azureTranscriber()): ModuleBackend {
+export function activate(context: ModuleBackendContext, issuer: SessionIssuer = azureSessionIssuer()): ModuleBackend {
   const lifetime = new AbortController();
   const json = (body: unknown, status = 200): ModuleResponse => ({
     status, headers: { 'Cache-Control': 'no-store', 'Content-Type': 'application/json' }, body,
@@ -17,16 +17,9 @@ export function activate(context: ModuleBackendContext, transcriber: Transcriber
   return {
     routes: [
       {
-        method: 'GET', path: '/config-ready',
-        async handler() {
-          try { await readConfig(context.dataRoot); return json({ ready: true }); }
-          catch (error) { return failure(error); }
-        },
-      },
-      {
-        method: 'POST', path: '/transcribe', body: 'json', bodyLimit: MAX_JSON_BYTES,
+        method: 'POST', path: '/session', body: 'json', bodyLimit: MAX_JSON_BYTES,
         async handler(request) {
-          if (active) return failure(new SpeechError('SPEECH_BUSY', '已有语音正在转写，请等待完成后重试。', 409));
+          if (active) return failure(new SpeechError('SPEECH_BUSY', '正在建立语音连接，请等待完成后重试。', 409));
           active = true;
           try {
             const signal = AbortSignal.any([request.signal, context.signal, lifetime.signal]);
@@ -34,9 +27,9 @@ export function activate(context: ModuleBackendContext, transcriber: Transcriber
             const input = parseInput(request.body);
             const config = await readConfig(context.dataRoot);
             signal.throwIfAborted();
-            const text = await transcriber.transcribe(config, input, signal);
+            const session = await issuer.issue(config, input, signal);
             signal.throwIfAborted();
-            return json({ text });
+            return json(session);
           } catch (error) {
             if (request.signal.aborted || context.signal.aborted || lifetime.signal.aborted) return failure(new SpeechError('CANCELLED', '语音转写已取消。', 499));
             return failure(error);

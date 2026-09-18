@@ -1,54 +1,48 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { readinessClient, transcriptionClient } from './transport.ts';
+import { sessionClient } from './transport.ts';
 import { MAX_RESPONSE_BYTES } from '../shared/limits.ts';
 
-test('browser transport uses only module request, bounded typed body and no session/key/path', async () => {
-  const signal = new AbortController().signal;
-  const client = transcriptionClient(async (path, init) => {
-    assert.equal(path, '/transcribe'); assert.equal(init?.method, 'POST'); assert.equal(init?.signal, signal);
-    assert.deepEqual(JSON.parse(init?.body as string), { audio: 'AQID', mime: 'audio/wav', context: 'context' });
-    return Response.json({ text: 'recognized' });
+const session = () => ({ clientSecret: 'ephemeral-fixture', expiresAt: Math.floor(Date.now() / 1000) + 60,
+  callsUrl: 'https://synthetic.openai.azure.com/openai/v1/realtime/calls' });
+test('browser asks only for a session with context, never sends audio or credentials to the module', async () => {
+  const client = sessionClient(async (path, init) => {
+    assert.equal(path, '/session'); assert.equal(init?.method, 'POST');
+    assert.ok(init?.signal instanceof AbortSignal);
+    assert.deepEqual(JSON.parse(String(init?.body)), { context: 'context' });
+    return Response.json(session());
   });
-  assert.equal(await client(new Uint8Array([1, 2, 3]), 'context', signal), 'recognized');
+  assert.equal((await client('context', new AbortController().signal)).clientSecret, 'ephemeral-fixture');
 });
-test('readiness checks the fixed module endpoint without credentials/audio and rereads on each explicit call', async () => {
-  let configured = false;
-  let requests = 0;
-  const ready = readinessClient(async (path, init) => {
+test('each explicit start rereads configuration; credential cancellation cannot start recording', async () => {
+  let configured = false, requests = 0;
+  const client = sessionClient(async () => {
     requests++;
-    assert.equal(path, '/config-ready');
-    assert.equal(init?.method, 'GET');
-    assert.equal(init?.body, undefined);
-    assert.ok(init.signal instanceof AbortSignal);
-    return configured ? Response.json({ ready: true })
-      : Response.json({ error: { code: 'CONFIG_UNAVAILABLE', message: '请创建 azure-speech.json。' } }, { status: 503 });
+    return configured ? Response.json(session())
+      : Response.json({ error: { code: 'CONFIG_UNAVAILABLE', message: '请创建 azure-openai.json。' } }, { status: 503 });
   });
-  await assert.rejects(ready(new AbortController().signal), /azure-speech\.json/);
+  await assert.rejects(client(undefined, new AbortController().signal), /azure-openai\.json/);
   configured = true;
-  await ready(new AbortController().signal);
+  await client(undefined, new AbortController().signal);
   assert.equal(requests, 2);
-});
-
-test('readiness cancellation propagates to the request and cannot become permission to record', async () => {
   const controller = new AbortController();
-  const ready = readinessClient(async (_path, init) => {
-    controller.abort();
-    assert.equal(init?.signal?.aborted, true);
-    return Response.json({ ready: true });
-  });
-  await assert.rejects(ready(controller.signal), { name: 'AbortError' });
-  for (const body of [{ ready: false }, {}, { ready: 'yes' }]) {
-    await assert.rejects(readinessClient(async () => Response.json(body))(new AbortController().signal));
+  await assert.rejects(sessionClient(async (_path, init) => {
+    controller.abort(); assert.equal(init?.signal?.aborted, true); return Response.json(session());
+  })(undefined, controller.signal), { name: 'AbortError' });
+});
+test('credentials must be current and target the fixed Azure WebRTC path', async () => {
+  for (const value of [{}, { ...session(), clientSecret: '' }, { ...session(), expiresAt: 1 },
+    { ...session(), callsUrl: 'https://example.com/calls' },
+    { ...session(), callsUrl: 'https://synthetic.openai.azure.com/openai/v1/realtime/calls?other=true' },
+    { ...session(), callsUrl: 'https://synthetic.openai.azure.com:443/openai/v1/realtime/calls' }]) {
+    await assert.rejects(sessionClient(async () => Response.json(value))(undefined, new AbortController().signal), { code: 'SESSION_INVALID' });
   }
 });
-test('browser transport surfaces safe backend errors and rejects malformed, blank or oversized results', async () => {
-  for (const response of [
-    Response.json({ error: { code: 'CONFIG_UNAVAILABLE', message: 'Create azure-speech.json with endpoint and key.' } }, { status: 503 }),
-    Response.json({ text: '' }), Response.json({ text: 3 }), new Response('invalid'),
-    new Response(new Uint8Array(MAX_RESPONSE_BYTES + 1)),
-  ]) {
-    await assert.rejects(transcriptionClient(async () => response)(new Uint8Array([1]), undefined, new AbortController().signal));
+test('malformed/oversized responses and network errors remain safe', async () => {
+  for (const response of [new Response('invalid'), new Response(new Uint8Array(MAX_RESPONSE_BYTES + 1))]) {
+    await assert.rejects(sessionClient(async () => response)(undefined, new AbortController().signal));
     assert.equal(response.body?.locked, false);
   }
+  await assert.rejects(sessionClient(async () => { throw new Error('PRIVATE'); })(undefined, new AbortController().signal),
+    error => error instanceof Error && !error.message.includes('PRIVATE'));
 });

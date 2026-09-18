@@ -1,7 +1,9 @@
-import { isRecord, MAX_RESPONSE_BYTES, MAX_TEXT_POINTS, SpeechError } from '../shared/limits.ts';
+import { isRecord, MAX_RESPONSE_BYTES, SpeechError } from '../shared/limits.ts';
+import { parseSession } from '../shared/session.ts';
+import type { SpeechSession } from '../shared/session.ts';
 
 export type Request = (path: string, init?: RequestInit) => Promise<Response>;
-export type Transcribe = (audio: Uint8Array<ArrayBuffer>, context: string | undefined, signal: AbortSignal) => Promise<string>;
+export type CreateSession = (context: string | undefined, signal: AbortSignal) => Promise<SpeechSession>;
 
 async function moduleResponse(response: Response, signal: AbortSignal): Promise<unknown> {
   if (!response.body) throw new SpeechError('HTTP_FAILED', '语音模块返回了空响应。');
@@ -35,42 +37,23 @@ async function moduleResponse(response: Response, signal: AbortSignal): Promise<
   return value;
 }
 
-export function readinessClient(request: Request): (signal: AbortSignal) => Promise<void> {
-  return async signal => {
-    const deadline = AbortSignal.timeout(10_000);
+export function sessionClient(request: Request): CreateSession {
+  return async (context, signal) => {
+    const deadline = AbortSignal.timeout(35_000);
     const combined = AbortSignal.any([signal, deadline]);
     try {
       combined.throwIfAborted();
-      const response = await request('/config-ready', { method: 'GET', signal: combined });
+      const response = await request('/session', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(context ? { context } : {}), signal: combined,
+      });
       const value = await moduleResponse(response, combined);
-      if (!isRecord(value) || value.ready !== true) throw new SpeechError('CONFIG_INVALID', '语音配置检查未成功，请检查 azure-speech.json。');
+      return parseSession(value);
     } catch (error) {
       signal.throwIfAborted();
-      if (deadline.aborted) throw new SpeechError('CONFIG_TIMEOUT', '语音配置检查超时，未开始录音，请稍后重试。');
+      if (deadline.aborted) throw new SpeechError('SESSION_TIMEOUT', '获取语音连接凭据超时，未开始录音，请稍后重试。');
       if (error instanceof SpeechError) throw error;
-      throw new SpeechError('HTTP_FAILED', '无法连接语音模块检查配置，未开始录音，请检查连接后重试。');
+      throw new SpeechError('HTTP_FAILED', '无法连接语音模块获取短期凭据，未开始录音，请检查连接后重试。');
     }
-  };
-}
-
-export function transcriptionClient(request: Request): Transcribe {
-  return async (audio, context, signal) => {
-    let binary = '';
-    for (let offset = 0; offset < audio.length; offset += 8192) binary += String.fromCharCode(...audio.subarray(offset, offset + 8192));
-    let response: Response;
-    try {
-      response = await request('/transcribe', {
-        method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ audio: btoa(binary), mime: 'audio/wav', ...(context ? { context } : {}) }), signal,
-      });
-    } catch {
-      signal.throwIfAborted();
-      throw new SpeechError('HTTP_FAILED', '无法连接语音模块，请检查连接后重试。');
-    }
-    const value = await moduleResponse(response, signal);
-    if (!isRecord(value) || typeof value.text !== 'string' || !value.text.trim() || [...value.text].length > MAX_TEXT_POINTS) {
-      throw new SpeechError('HTTP_FAILED', '语音转写没有返回可用文字。');
-    }
-    return value.text;
   };
 }
