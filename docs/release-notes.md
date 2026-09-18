@@ -27,8 +27,8 @@ with bounded scrolling on short screens. There are no private DOM queries, visua
 reordering, nested controls, duplicate editors or new host slots.
 
 Successful insertion restores the original input's focus and caret only for its
-exact draft lifetime and revision. Explicit cancellation returns focus without
-redirecting late results. Draft leases, manual-edit conflicts, reused request IDs
+exact draft lifetime and revision. Lifecycle cancellation does not
+redirect late results. Draft leases, manual-edit conflicts, reused request IDs
 and recovery remain bound to the captured lifetime.
 
 Context remains the newest eligible completed root assistant reply captured at
@@ -65,3 +65,18 @@ This provider change requires no new host API or SDK pin, and does not change
 the already-selected unreleased versions (host 0.2.5 / Speech 0.1.1).
 Synthetic checks do not establish real microphone/browser-device support, Azure
 availability, credentials or recognition quality.
+
+## Review follow-up: preparation failures and button semantics
+
+Monitor track termination immediately after permission and AudioContext state
+from creation, without treating normal initial resume as failure. Recheck live
+audio tracks and running context before admission; preparation failure releases
+hardware, WebRTC, timers and the original draft lease instead of claiming recording.
+Microphone tracks stay disabled during setup. The 30-second setup deadline now
+also includes permission/resume, so unanswered permission cannot spin forever.
+
+The circular button retains one size: microphone -> disabled spinner -> stop ->
+disabled spinner -> microphone. No timer, adjacent phase copy, red retry mode or
+busy-click cancellation; accurate accessible names and busy/disabled states remain.
+Errors and conflict recovery retain the existing panel. There is no new audio
+cache, upload fallback, replay or automatic send.

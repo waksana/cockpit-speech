@@ -85,6 +85,7 @@ export function prepareRecording(signal: AbortSignal, fail: (error: SpeechError)
   let timer: ReturnType<typeof setTimeout> | undefined;
   let flushTimer: ReturnType<typeof setTimeout> | undefined;
   let finalTimer: ReturnType<typeof setTimeout> | undefined;
+  let setupTimer: ReturnType<typeof setTimeout> | undefined;
   let clearedBuffer: (() => void) | undefined;
   const stopMicrophone = () => {
     if (microphone) {
@@ -99,7 +100,7 @@ export function prepareRecording(signal: AbortSignal, fail: (error: SpeechError)
     closed = true;
     lifetime.abort(failure ?? abortError());
     signal.removeEventListener('abort', cancel);
-    clearTimeout(timer); clearTimeout(flushTimer); clearTimeout(finalTimer);
+    clearTimeout(timer); clearTimeout(flushTimer); clearTimeout(finalTimer); clearTimeout(setupTimer);
     stopMicrophone();
     if (output) for (const track of output.stream.getTracks()) track.stop();
     output?.disconnect();
@@ -163,8 +164,21 @@ export function prepareRecording(signal: AbortSignal, fail: (error: SpeechError)
   try {
     // Unlock audio during the click; credentials and permission are acquired afterward.
     context = env.createContext();
-    resumed = context.resume();
-    void resumed.catch(() => {});
+    const initializingContext = context;
+    let hasRun = initializingContext.state === 'running';
+    initializingContext.onstatechange = () => {
+      if (closed || stopping) return;
+      if (initializingContext.state === 'running') hasRun = true;
+      else if (hasRun || initializingContext.state === 'closed') {
+        failed(new SpeechError('AUDIO_FAILED', '浏览器暂停了音频，请重新录音。'));
+      }
+    };
+    resumed = initializingContext.resume().then(() => {
+      if (closed) return;
+      if (initializingContext.state !== 'running') {
+        failed(new SpeechError('AUDIO_FAILED', '音频设备未启动，请检查浏览器麦克风权限。'));
+      } else hasRun = true;
+    }, () => failed(new SpeechError('AUDIO_FAILED', '无法启动音频设备，请检查浏览器权限。')));
   } catch {
     cleanup();
     signal.throwIfAborted();
@@ -176,8 +190,8 @@ export function prepareRecording(signal: AbortSignal, fail: (error: SpeechError)
     async start(session) {
       if (closed || started || signal.aborted) throw abortError();
       started = true;
-      let deadline: AbortSignal | undefined;
       try {
+        setupTimer = setTimeout(() => failed(new SpeechError('CONNECTION_TIMEOUT', '麦克风或 Azure WebRTC 准备超时，请检查权限和网络；未自动重试。')), 30_000);
         parseSession(session);
         const acquired = env.getUserMedia({
           audio: { channelCount: 1, echoCancellation: true, noiseSuppression: true }, video: false,
@@ -187,13 +201,24 @@ export function prepareRecording(signal: AbortSignal, fail: (error: SpeechError)
             throw abortError();
           }
           microphone = value;
+          for (const track of value.getTracks()) {
+            track.enabled = false;
+            track.onended = () => failed(new SpeechError('AUDIO_FAILED', '麦克风已断开或权限已撤销。'));
+          }
           return value;
         });
         await abortable(Promise.all([resumed, acquired]), lifetime.signal);
-        if (audioContext.state !== 'running') throw new SpeechError('MIC_UNAVAILABLE', '音频设备未启动，请检查浏览器麦克风权限。');
+        const ensureAudioReady = () => {
+          lifetime.signal.throwIfAborted();
+          const tracks = microphone?.getTracks().filter(track => track.kind === 'audio') ?? [];
+          if (audioContext.state !== 'running' || !tracks.length || tracks.some(track => track.readyState !== 'live')) {
+            throw new SpeechError('AUDIO_FAILED', '麦克风或音频上下文已不可用，请重新录音。');
+          }
+          return tracks;
+        };
+        ensureAudioReady();
         parseSession(session);
-        deadline = AbortSignal.timeout(30_000);
-        const connectionSignal = AbortSignal.any([lifetime.signal, deadline]);
+        const connectionSignal = lifetime.signal;
         peer = env.createPeer();
         output = audioContext.createMediaStreamDestination();
         for (const track of output.stream.getTracks()) peer.addTrack(track, output.stream);
@@ -223,17 +248,15 @@ export function prepareRecording(signal: AbortSignal, fail: (error: SpeechError)
         if (closed) throw abortError();
         channel.send(JSON.stringify({ type: 'input_audio_buffer.clear' }));
         await abortable(cleared, connectionSignal);
-        if (closed) throw abortError();
+        ensureAudioReady();
         source = audioContext.createMediaStreamSource(microphone!);
         gate = audioContext.createGain();
         gate.gain.setValueAtTime(1, audioContext.currentTime);
         // Audio-render-clock gating also bounds transmission if the JS timer is delayed.
         gate.gain.setValueAtTime(0, audioContext.currentTime + MAX_SECONDS);
         source.connect(gate); gate.connect(output);
-        audioContext.onstatechange = () => {
-          if (!stopping && audioContext.state !== 'running') failed(new SpeechError('AUDIO_FAILED', '浏览器暂停了音频，请重新录音。'));
-        };
-        for (const track of microphone!.getTracks()) track.onended = () => failed(new SpeechError('AUDIO_FAILED', '麦克风已断开或权限已撤销。'));
+        for (const track of ensureAudioReady()) track.enabled = true;
+        clearTimeout(setupTimer);
         timer = setTimeout(() => {
           if (closed || stopping) return;
           stopMicrophone();
@@ -268,7 +291,6 @@ export function prepareRecording(signal: AbortSignal, fail: (error: SpeechError)
         if (failure) throw failure;
         if (cancelled) throw abortError();
         signal.throwIfAborted();
-        if (deadline?.aborted) throw new SpeechError('CONNECTION_TIMEOUT', 'Azure WebRTC 连接超时，请检查网络；未自动重试。');
         if (error instanceof SpeechError) throw error;
         throw new SpeechError('MIC_UNAVAILABLE', '无法准备麦克风或 Azure WebRTC 连接，请检查权限、配置和网络。');
       }

@@ -14,6 +14,14 @@ this is not live captions or a duplex voice assistant. Review the text and send
 it with Cockpit's normal action. Native free-text restrictions leave the
 microphone visible but disabled.
 
+The circular button keeps the same size in every phase: microphone when idle,
+disabled spinner while acquiring credentials/permission/connection, square only
+when ready to record, then disabled spinner while stopping/transcribing.
+**Wait for the square before speaking.** There is no timer, adjacent phase text,
+retry state or cancel action on the busy button. Failures restore the microphone
+and show the existing error panel; clicking again starts a new recording, never
+replays previous audio. Conflict recovery remains available in the result panel.
+
 ## Configuration — file only
 
 Create **`<dataRoot>/azure-openai.json`**, outside the immutable module install
@@ -99,7 +107,12 @@ origin and WebRTC connectivity; Cockpit does not proxy around blocked connection
 The click unlocks audio synchronously; permission follows successful credential
 issuance. A fresh WebRTC connection is created for each recording. A silent
 output track is negotiated first, then microphone audio is admitted only after
-the initial buffer-clear acknowledgement. WebRTC negotiates encoding/resampling;
+the initial buffer-clear acknowledgement and a final live-track/running-context
+check. Acquired microphone tracks stay disabled during preparation; no user
+audio is connected, buffered or sent to Azure before readiness. Device/context
+failure listeners cover preparation as well as recording. The browser may open
+the hardware to obtain permission; that is not a ready-to-record indication.
+WebRTC negotiates encoding/resampling;
 there is no WAV buffer, AudioWorklet asset or fixed hardware sample-rate
 requirement. Microphone audio is not played locally.
 
@@ -107,7 +120,8 @@ The maximum recording duration remains **120 seconds**. Audio-render-clock
 gating bounds transmission even if the JavaScript timer is delayed; the wall
 timer stops capture and automatically commits the turn. Stop immediately
 releases the microphone, briefly drains remaining audio over the silent track,
-and commits once. Connection setup is bounded to 30 seconds after permission;
+and commits once. Microphone permission, audio resume and connection setup share
+a 30-second deadline after credential issuance;
 final transcription is bounded to 90 seconds after commit. Responses/events and
 recognized text are bounded. No automatic reconnect, replay or retry occurs.
 

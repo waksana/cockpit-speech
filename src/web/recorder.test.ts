@@ -4,6 +4,8 @@ import type { TestContext } from 'node:test';
 import { prepareRecording } from './recorder.ts';
 import type { AudioEnvironment, Recording } from './recorder.ts';
 import { MAX_SECONDS, MAX_TEXT_POINTS, SpeechError } from '../shared/limits.ts';
+import { SpeechService } from './speech.ts';
+import type { ModuleDraft } from '@cockpit/module-api';
 
 const session = () => ({ clientSecret: 'ephemeral-fixture', expiresAt: Math.floor(Date.now() / 1000) + 60,
   callsUrl: 'https://synthetic.openai.azure.com/openai/v1/realtime/calls' });
@@ -12,7 +14,8 @@ function fixture() {
   const errors: SpeechError[] = [];
   const sent: string[] = [];
   const gains: [number, number][] = [];
-  const track = { stop: () => { stops++; }, onended: null as (() => void) | null };
+  const track = { kind: 'audio', readyState: 'live', enabled: true,
+    stop: () => { stops++; track.readyState = 'ended'; track.onended?.(); }, onended: null as (() => void) | null };
   const stream = { getTracks: () => [track] } as unknown as MediaStream;
   let grant!: (value: MediaStream) => void;
   const permission = new Promise<MediaStream>(resolve => { grant = resolve; });
@@ -79,6 +82,110 @@ async function flush(t: TestContext) {
   await Promise.resolve();
 }
 
+function serviceFixture(f: ReturnType<typeof fixture>) {
+  let leases = 0;
+  const reports: Error[] = [];
+  const draft: ModuleDraft = {
+    id: 'exact-draft', sessionId: 's', purpose: { kind: 'prompt' },
+    subscribe: () => () => {},
+    getSnapshot: () => ({ text: '', revision: 0, pending: false, unconfirmed: false, hasContent: false, blocks: [] }),
+    editText: () => assert.fail('Failure must never edit or submit'),
+    block: () => { leases++; return () => { leases--; }; },
+  };
+  const service = new SpeechService({
+    signal: new AbortController().signal,
+    host: { getSnapshot: () => ({ sessionId: 's', visible: true, connected: true }), subscribe: () => () => {} },
+    chatWindow: { getSnapshot: () => ({ sessionId: 's', status: 'unavailable', messages: [], hasMore: false, partial: false }), subscribe: () => () => {} },
+    session: async () => session(),
+    prepare: (signal, fail, limit) => prepareRecording(signal, error => { f.errors.push(error); fail(error); }, limit, f.env),
+    report: error => reports.push(error),
+  });
+  service.setTarget({ draft, disabled: false, sendBlocked: false, selection: () => ({ start: 0, end: 0 }) });
+  return { service, reports, leases: () => leases };
+}
+
+test('device/context failure throughout connection setup cleans resources and releases the actual service lease', async () => {
+  for (const stage of ['offer', 'remote-description', 'channel-open', 'buffer-clear']) {
+    for (const cause of ['track-ended', 'context-suspended']) {
+      const f = fixture(); const s = serviceFixture(f);
+      let reached!: () => void;
+      const waiting = new Promise<void>(resolve => { reached = resolve; });
+      if (stage === 'offer') f.peer.createOffer = () => { reached(); return new Promise(() => {}); };
+      if (stage === 'remote-description') f.peer.setRemoteDescription = () => { reached(); return new Promise(() => {}); };
+      if (stage === 'channel-open') f.peer.setRemoteDescription = async () => { reached(); };
+      if (stage === 'buffer-clear') f.channel.send = () => { reached(); };
+      const pending = s.service.start(); f.grant(f.stream); await waiting;
+      assert.equal(s.leases(), 1); assert.equal(f.track.enabled, false); assert.deepEqual(f.gains, []);
+      if (cause === 'track-ended') { f.track.readyState = 'ended'; f.track.onended!(); }
+      else { f.context.state = 'suspended'; f.context.onstatechange!(); }
+      await pending;
+      assert.equal(s.service.getSnapshot().phase, 'idle');
+      assert.ok(s.service.getSnapshot().error); assert.equal(s.service.canStart(), true);
+      assert.equal(s.leases(), 0); assert.equal(f.errors.length, 1); assert.deepEqual(s.reports, []);
+      assert.equal(f.values().stops, 1); assert.equal(f.values().closes, 1);
+      assert.equal(f.values().peerCloses, 1); assert.equal(f.values().channelCloses, 1);
+      assert.equal(f.values().outputStops, 1); assert.deepEqual(f.gains, []);
+      s.service.dispose();
+    }
+  }
+});
+test('final readiness check rejects ended/missing audio tracks or suspended context even without a delivered event', async () => {
+  for (const cause of ['ended', 'no-audio', 'suspended']) {
+    const f = fixture();
+    f.channel.send = () => {
+      if (cause === 'ended') f.track.readyState = 'ended';
+      if (cause === 'no-audio') f.track.kind = 'video';
+      if (cause === 'suspended') f.context.state = 'suspended';
+      f.emit('input_audio_buffer.cleared');
+    };
+    await assert.rejects(f.start(), { code: 'AUDIO_FAILED' });
+    assert.equal(f.values().stops, 1); assert.equal(f.values().peerCloses, 1);
+    assert.equal(f.values().closes, 1); assert.deepEqual(f.gains, []);
+  }
+});
+test('initial suspended context may resume normally; later suspension before permission completion fails', async () => {
+  const normal = fixture();
+  normal.context.state = 'suspended';
+  normal.context.resume = async () => {
+    normal.context.onstatechange!();
+    normal.context.state = 'running'; normal.context.onstatechange!();
+  };
+  const recording = await normal.start();
+  assert.equal(normal.track.enabled, true); assert.deepEqual(normal.errors, []);
+  recording.cancel(); assert.deepEqual(normal.errors, []);
+
+  const f = fixture(); const s = serviceFixture(f);
+  const pending = s.service.start();
+  await Promise.resolve(); await Promise.resolve();
+  f.context.state = 'suspended'; f.context.onstatechange!();
+  await pending; f.grant(f.stream); await Promise.resolve();
+  assert.equal(s.leases(), 0); assert.equal(f.errors.length, 1); assert.ok(s.service.getSnapshot().error);
+  assert.equal(f.values().stops, 1); assert.equal(f.values().closes, 1);
+  s.service.dispose();
+});
+test('preparation timeouts bound permission, resume and all connection waits and release service leases', async t => {
+  t.mock.timers.enable({ apis: ['setTimeout'] });
+  for (const stage of ['permission', 'resume', 'offer', 'channel', 'clear']) {
+    const f = fixture(); const s = serviceFixture(f);
+    let reached!: () => void;
+    const waiting = new Promise<void>(resolve => { reached = resolve; });
+    if (stage === 'permission') f.env.getUserMedia = () => { reached(); return new Promise(() => {}); };
+    if (stage === 'resume') f.context.resume = () => { reached(); return new Promise(() => {}); };
+    if (stage === 'offer') f.peer.createOffer = () => { reached(); return new Promise(() => {}); };
+    if (stage === 'channel') f.peer.setRemoteDescription = async () => { reached(); };
+    if (stage === 'clear') f.channel.send = () => { reached(); };
+    const pending = s.service.start();
+    if (stage !== 'permission') f.grant(f.stream);
+    await waiting; await Promise.resolve(); await Promise.resolve();
+    t.mock.timers.tick(30_000); await pending;
+    assert.equal(s.leases(), 0); assert.equal(s.service.getSnapshot().phase, 'idle');
+    assert.equal(f.errors.length, 1); assert.ok(s.service.getSnapshot().error); assert.equal(f.values().closes, 1);
+    assert.equal(f.values().stops, stage === 'permission' ? 0 : 1);
+    assert.equal(f.values().peerCloses, ['permission', 'resume'].includes(stage) ? 0 : 1);
+    s.service.dispose();
+  }
+});
+
 test('gesture preparation unlocks audio but never asks for permission or contacts Azure before credentials', async () => {
   const f = fixture(); const preparation = f.prepare();
   assert.equal(f.values().resumed, 1); assert.equal(f.values().captures, 0);
@@ -106,6 +213,8 @@ test('valid credentials connect directly; stop drains RTP once and waits for the
   const result = recording.stop(() => { committed++; });
   assert.equal(recording.stop(), result);
   assert.equal(f.values().stops, 1);
+  f.context.state = 'suspended'; f.context.onstatechange!();
+  assert.deepEqual(f.errors, [], 'intentional stop and late audio state changes do not report failure');
   assert.equal(f.values().outputStops, 0, 'silent track drains remaining audio');
   await flush(t);
   assert.equal(committed, 1);
@@ -232,4 +341,18 @@ test('transcript deadline releases hardware, peer and pending promise', async t 
   const pending = recording.stop(); const rejected = assert.rejects(pending, { code: 'PROVIDER_TIMEOUT' });
   await flush(t); t.mock.timers.tick(90_000); await rejected;
   assert.equal(f.values().peerCloses, 1); assert.equal(f.errors.length, 1);
+});
+test('final timeout releases the actual service lease and permits a fresh recording', async t => {
+  t.mock.timers.enable({ apis: ['setTimeout'] });
+  const f = fixture(); const s = serviceFixture(f);
+  const started = s.service.start(); f.grant(f.stream); await started;
+  const stopped = s.service.stop();
+  await flush(t);
+  assert.equal(s.service.getSnapshot().phase, 'transcribing'); assert.equal(s.leases(), 1);
+  t.mock.timers.tick(90_000); await stopped;
+  assert.equal(s.service.getSnapshot().phase, 'idle'); assert.equal(s.leases(), 0);
+  assert.ok(s.service.getSnapshot().error); assert.equal(s.service.canStart(), true);
+  assert.equal(f.values().stops, 1); assert.equal(f.values().closes, 1);
+  assert.equal(f.values().peerCloses, 1); assert.equal(f.values().outputStops, 1);
+  s.service.dispose();
 });

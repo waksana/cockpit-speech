@@ -29,6 +29,11 @@ must succeed before microphone access. A new peer/data channel and initially
 silent audio destination are created per attempt. SDP is posted directly to
 Azure with the short-lived credential. Once the channel is open and initial
 buffer clearing is acknowledged, the microphone feeds the WebRTC audio track.
+Track-ended listeners are attached as soon as permission returns; context
+state is watched from creation, allowing the initial suspended-to-running
+transition but rejecting later suspension. Tracks remain disabled until a final
+audio-track `readyState` and context-state check. A shared 30-second preparation
+deadline covers permission, resume, SDP, channel open and buffer clear.
 An audio-clock gain boundary and wall timer cap recording at 120 seconds.
 Stop releases hardware, drains the final RTP audio for 250ms, then commits once.
 Only a bounded final transcript whose item ID matches that commit can complete.
@@ -46,6 +51,11 @@ The actual `composerInput` Base retains native controlled props/events and React
 19 ref cleanup; the microphone is its sibling. The existing `composer` wrapper
 renders feedback after the whole row. Focus receipts remain draft/revision scoped.
 No business slot, private DOM lookup, copied editor or submission method exists.
+The public control-size token fixes the circular button's dimensions. Idle and
+recording use microphone/stop icons; all preparation/stopping/transcribing phases
+use a disabled, accessibly named busy spinner. There is no stage text, timer or
+busy-click cancellation. Error/notice/recovery feedback remains after the row;
+navigation, target invalidation and module disposal still cancel internally.
 
 ## Existing synthetic checks
 
@@ -58,6 +68,10 @@ Azure credentials, real microphone devices or production configuration:
   limits, no key readback, bounded responses, cancellation and no retries.
 - Audio preparation without permission, expired credentials, late permission,
   WebRTC offer cancellation, safe SDP rejection and resource cleanup.
+- Actual recorder plus service-lease regressions for device/context failures at
+  offer, remote description, channel open and buffer clear; missing events are
+  caught by final readiness checks. Initial resume and intentional stop do not
+  raise false failures; preparation and final deadlines release all ownership.
 - Buffer-clear/commit acknowledgement, final-before-ack, mismatched item IDs,
   late completions, invalid/oversized/empty transcripts and provider errors.
 - Audio-clock gating, 120-second stop/commit, double stop, final timeout and

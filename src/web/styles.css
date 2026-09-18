@@ -1,4 +1,23 @@
-.cockpit-speech-mic[aria-pressed="true"] { color: var(--ck-color-danger); }
+.cockpit-speech-mic {
+  box-sizing: border-box;
+  flex: 0 0 var(--ck-control-size);
+  width: var(--ck-control-size);
+  height: var(--ck-control-size);
+  min-width: var(--ck-control-size);
+  min-height: var(--ck-control-size);
+  padding: 0;
+  border-radius: 50%;
+}
+.cockpit-speech-spinner {
+  box-sizing: border-box;
+  width: 20px;
+  height: 20px;
+  border: 2px solid currentColor;
+  border-right-color: transparent;
+  border-radius: 50%;
+  animation: cockpit-speech-spin 0.7s linear infinite;
+}
+@keyframes cockpit-speech-spin { to { transform: rotate(360deg); } }
 .cockpit-speech-panel {
   flex: 0 1 auto;
   min-height: 0;

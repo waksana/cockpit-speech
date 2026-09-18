@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import type { ComposerInputProps, ModuleDraft, ModuleFrontendContext } from '@cockpit/module-api';
 import { activate, composeEditorRef } from './index.ts';
+import type { SpeechService, SpeechSnapshot } from './speech.ts';
 
 test('editor refs preserve object refs, callback nulls and React 19 cleanup', () => {
   const node = {} as HTMLTextAreaElement;
@@ -33,6 +34,9 @@ test('input middleware preserves native textarea props and keeps decision microp
   type Element = { type: unknown; props: Record<string, unknown>; children: unknown[] };
   const disposers: (() => void)[] = [];
   const effects: (() => void)[] = [];
+  let service!: SpeechService;
+  let phase: SpeechSnapshot['phase'] = 'idle';
+  let error: string | null = null;
   const host = { getSnapshot: () => ({ sessionId: 's', visible: true, connected: true }), subscribe: () => () => {} };
   const context = {
     apiVersion: 2, uiVersion: 1, chatWindowVersion: 1, composerInputVersion: 1,
@@ -43,15 +47,16 @@ test('input middleware preserves native textarea props and keeps decision microp
       useRef: () => ({ current: null }),
       useMemo: (factory: () => unknown) => factory(),
       useCallback: (fn: unknown) => fn,
-      useSyncExternalStore: (_subscribe: unknown, snapshot: () => unknown) => snapshot(),
+      useSyncExternalStore: (_subscribe: unknown, snapshot: () => unknown) =>
+        snapshot === service?.getSnapshot ? { ...service.getSnapshot(), phase, error } : snapshot(),
       useLayoutEffect: (effect: () => void | (() => void)) => { const cleanup = effect(); if (cleanup) effects.push(cleanup); },
     },
     state: {
       host,
       chatWindow: { getSnapshot: () => ({ sessionId: 's', status: 'unavailable', hasMore: false, partial: false, messages: [] }), subscribe: () => () => {} },
       bindDraft: (draft: ModuleDraft) => draft,
-      register: (registration: { create(): unknown; dispose(value: unknown): void }) => {
-        const service = registration.create();
+      register: (registration: { create(): SpeechService; dispose(value: SpeechService): void }) => {
+        service = registration.create();
         disposers.push(() => registration.dispose(service));
         return { get: () => service };
       },
@@ -98,6 +103,25 @@ test('input middleware preserves native textarea props and keeps decision microp
       assert.equal(mic.props['aria-label'], '开始语音输入');
       assert.equal(mic.props.disabled, sendBlocked);
       effects.pop()!();
+      for (const current of ['checking', 'permission', 'recording', 'stopping', 'transcribing'] as const) {
+        phase = current;
+        const rendered = Wrapped({ draft, operation, disabled: false, sendBlocked: false, value: '', onSubmit: nativeSubmit, onChange: nativeTextChange });
+        const button = rendered.children[1] as Element;
+        const busy = current !== 'recording';
+        assert.equal(button.props.disabled, busy);
+        assert.equal(button.props['aria-busy'], busy);
+        assert.equal(button.props['aria-pressed'], !busy);
+        assert.notEqual(button.props['aria-label'], '取消语音输入');
+        const icon = button.children[0] as Element;
+        assert.equal(icon.type === 'span', busy);
+        if (busy) {
+          assert.equal(icon.props.className, 'cockpit-speech-spinner');
+          (button.props.onClick as () => void)();
+          assert.equal(service.getSnapshot().phase, 'idle', 'busy clicks neither cancel nor start');
+        }
+        effects.pop()!();
+      }
+      phase = 'idle';
     }
     const feedback = frontend.components![1]!;
     assert.equal(feedback.boundary, 'composer');
@@ -108,5 +132,15 @@ test('input middleware preserves native textarea props and keeps decision microp
     assert.equal((tree.children[0] as Element).type, Base);
     assert.equal((tree.children[0] as Element).props, props);
     assert.equal(typeof (tree.children[1] as Element).type, 'function', 'feedback follows the whole composer');
+    const Panel = (tree.children[1] as Element).type as () => Element | null;
+    for (const current of ['checking', 'permission', 'recording', 'stopping', 'transcribing'] as const) {
+      phase = current;
+      assert.equal(Panel(), null, 'no phase text, timer or cancel panel');
+    }
+    phase = 'idle'; error = 'Synthetic device disconnected';
+    const panel = Panel()!;
+    const alert = panel.children[0] as Element;
+    assert.equal(alert.props.role, 'alert');
+    assert.deepEqual(alert.children, [error]);
   } finally { for (const effect of effects) effect(); for (const dispose of disposers) dispose(); }
 });
