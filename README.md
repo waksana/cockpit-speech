@@ -129,12 +129,17 @@ recording from silently replacing it.
 
 Requires **Node 24.20.0**, **pnpm 10.34.5**, Git and tar. The SDK pin is in
 `tooling/host-sdk.json`, currently source commit
-`62412305ff61ce67d5e965465e53eaa7d44a8fee` (`@cockpit/module-api` 0.2.4).
+`d752dd6a016f8ff84235c4cd8850e2b63778bf1b` (`@cockpit/module-api` 0.2.5).
 This is a **current unreleased host-source pairing**, not a claim that an existing
 published host release supports these capabilities. The pin must be reachable
 from the configured host repository before remote CI can check it out.
 Frontend API v2/UI v1 plus additive `chatWindowVersion: 1` and
-`composerActionsVersion: 1` are required independently.
+`composerInputVersion: 1` are required independently.
+Speech 0.1.1 wraps the host's real controlled textarea through `composerInput`;
+it does not provide an editor or native submit implementation. Status/error/
+recovery content follows the whole `composer` Base, outside the input row.
+The host's prompt-only File button stays before the textarea, and its native send
+stays after the microphone. Old Speech 0.1.0/host input contracts are not compatible.
 
 ```sh
 # Check out the exact pin in a separate, clean host source directory first.
@@ -145,7 +150,7 @@ pnpm test
 pnpm build
 # Packaging requires the module's own committed, clean source and a fresh build.
 pnpm package
-node scripts/verify-package.mjs module-output/cockpit-speech-0.1.0.tgz
+node scripts/verify-package.mjs module-output/cockpit-speech-0.1.1.tgz
 ```
 
 The SDK exporter checks the exact clean host commit; generated `.cockpit-sdk` is
@@ -157,6 +162,6 @@ compiled runtime/assets/licenses, GPL license and build receipt—not config, ke
 dependencies, source tests or recordings. Install the resulting archive through
 Cockpit's existing module installation flow; this repository does not deploy it.
 
-See [development and verification](docs/development.md), [provenance](NOTICE.md)
+See [release notes](docs/release-notes.md), [development and verification](docs/development.md), [provenance](NOTICE.md)
 and [security](SECURITY.md). Azure endpoint and enhanced-mode documentation:
 <https://learn.microsoft.com/en-us/azure/ai-services/speech-service/llm-speech>.

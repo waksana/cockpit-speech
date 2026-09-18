@@ -97,6 +97,9 @@ test('prompt, ask and plan insert at the captured selection only after stop; con
     assert.equal(f.original.getSnapshot().blocks.length, 0);
     assert.equal(f.values().capturedContext, 'initial context');
     assert.equal(f.service.getSnapshot().recovery, null);
+    assert.deepEqual(f.service.getSnapshot().focus, {
+      id: f.original.id, revision: f.original.getSnapshot().revision, selection: { start: 12, end: 12 },
+    });
   }
 });
 test('manual revisions win and successful text remains recoverable; explicit insertion preserves selection', async t => {
@@ -112,12 +115,14 @@ test('manual revisions win and successful text remains recoverable; explicit ins
   f.service.insertRecovery();
   assert.equal(f.original.getSnapshot().text, 'manualrecognized words');
   assert.equal(f.service.getSnapshot().recovery, null);
+  assert.deepEqual(f.service.getSnapshot().focus?.selection, { start: 16, end: 16 });
 });
 test('a recovered result never redirects to another draft, including reused native request IDs', async t => {
   const f = fixture({ purpose: { kind: 'ask', requestId: 'reused' } }); t.after(() => f.service.dispose());
   await f.service.start(); f.original.editText('manual');
   const stopped = f.service.stop(); f.result.resolve('recognized'); await stopped;
   f.service.clearTarget(f.original.id);
+  assert.equal(f.service.getSnapshot().focus, null);
   assert.equal(f.service.getSnapshot().recovery?.text, 'recognized');
   const replacement = draft('different-lifetime', { kind: 'ask', requestId: 'reused' });
   f.service.setTarget({ draft: replacement, disabled: false, sendBlocked: false, selection: () => ({ start: 0, end: 0 }) });

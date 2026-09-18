@@ -1,5 +1,9 @@
 .cockpit-speech-mic[aria-pressed="true"] { color: var(--ck-color-danger); }
 .cockpit-speech-panel {
+  flex: 0 1 auto;
+  min-height: 0;
+  max-height: 35dvh;
+  overflow-y: auto;
   color: var(--ck-color-text);
   background: var(--ck-color-surface);
   border: 1px solid var(--ck-color-border);

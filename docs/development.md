@@ -17,9 +17,15 @@ request/module cancellation with a provider timeout, bounds response reading,
 and discards raw provider error bodies. No server transcript/audio persistence.
 
 `src/web/speech.ts` is the registered, activation-scoped state service. React
-middleware only binds the captured draft, composes the public editor ref,
-preserves inherited actions/children/props, and renders microphone/status/error/
-recovery controls. The public `chatWindow` projection supplies optional context;
+`composerInput` middleware binds the captured draft, composes the public textarea
+ref (including React 19 cleanup), preserves controlled value/onChange and native
+events, and returns the real Base followed by the microphone. A separate existing
+`composer` wrapper preserves its full Base/children and renders status/error/
+recovery content after the entire input row. There is no new slot, nested control,
+private DOM lookup, CSS reordering or copied editor/submit implementation.
+Insertion focus/selection receipts carry the exact draft lifetime and revision;
+replacement inputs and newer manual edits cannot consume them.
+The public `chatWindow` projection supplies optional context;
 it never supplies write authority. The service owns cancellation, draft leases
 and insertion checks. No module schema or menu is registered.
 
@@ -43,6 +49,7 @@ reuse another project's dependencies.
   unconfirmed/peer blocks, double stop, late HTTP completion, cancellation and
   revocation.
 - Ref composition including React 19 callback cleanup and capability gating.
+- Real paired host mounts through the optional host regression command below.
 - File readiness/reload, strict endpoints/config fields, non-symlinks and safe
   failures; bounded request/response parsing and safe auth/provider errors.
 - Multipart contents/order, timeout/cancellation/no retry, backend concurrency
@@ -61,3 +68,24 @@ authorized with test audio and a separately configured resource.
 CI runs SDK preparation, frozen dependency installation, typecheck, synthetic
 tests, clean-source build/package and exact archive verification. It has only
 read permissions and no deployment or credential-backed integration step.
+
+## Paired host regression
+
+The exact public API pin is `d752dd6a016f8ff84235c4cd8850e2b63778bf1b`,
+SDK version 0.2.5, recorded in `tooling/host-sdk.json`. Prepare it with
+`node scripts/sdk.mjs prepare /absolute/clean-pinned-cockpit`, then install with
+the frozen lockfile and build this module. From that host source, run its existing
+React component harness with the actual compiled consumer:
+
+```sh
+COCKPIT_TEST_SPEECH_ENTRY=/absolute/cockpit-speech/dist/web/index.js \
+  pnpm --filter @cockpit/web exec tsx --tsconfig tsconfig.app.json --test \
+  src/components/Thread.lifecycle.test.ts
+```
+
+This uses synthetic audio/permission/HTTP providers, never Azure or hardware. It
+mounts the production Composer and this module's actual middleware, checks natural
+DOM and feedback placement, native send leases, React 19 ref cleanup, manual-edit
+recovery and caret/focus return. The host's maintained Chat Lab remains the browser
+surface; do not create a parallel demo app. The host API PR must merge before the
+paired consumer PR. A pinned feature commit is reproducible but is not a release.
