@@ -1,0 +1,24 @@
+{
+  "name": "cockpit-speech",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "license": "GPL-3.0-only",
+  "packageManager": "pnpm@10.34.5",
+  "engines": { "node": "24.20.0" },
+  "scripts": {
+    "sdk:prepare": "node scripts/sdk.mjs prepare",
+    "build": "node scripts/build.mjs",
+    "test": "node --experimental-strip-types --test \"src/**/*.test.ts\" scripts/*.test.mjs",
+    "typecheck": "tsc --noEmit",
+    "package": "node scripts/package.mjs",
+    "verify:package": "node scripts/verify-package.mjs"
+  },
+  "devDependencies": {
+    "@cockpit/module-api": "file:.cockpit-sdk/module-api",
+    "@types/node": "25.9.5",
+    "@types/react": "19.2.18",
+    "lucide-static": "1.46.0",
+    "typescript": "5.9.3"
+  }
+}
