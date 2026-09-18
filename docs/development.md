@@ -1,106 +1,92 @@
 # Development and verification
 
-The backend has one internal `SessionIssuer` interface and one Azure OpenAI
-implementation, not a provider plugin framework. Its only route is:
+## Backend boundary
 
-- `POST /session`: JSON `{context?: string}`. It rejects audio, model, key,
-  endpoint and other browser-supplied options. Returns
-  `{clientSecret, expiresAt, callsUrl}` or a safe `{error:{code,message}}`.
-  Responses are `no-store`. One credential exchange runs at a time; this is not
-  a global limit on already-connected browser sessions.
+The sole route is `POST /session`, accepting only `{}` and returning
+`{clientSecret, expiresAt, socketUrl, deployment}` or a safe `{error:{code,message}}`.
+Responses are `no-store`. Context, audio, model overrides and browser credentials
+are rejected. One credential exchange runs at a time; that is not an Azure
+session quota. `config.ts` rereads bounded regular non-symlink
+`azure-openai.json` files with descriptor/identity checks.
 
-`src/server/config.ts` rereads `azure-openai.json` using `O_NOFOLLOW`, bounded
-regular-file reads and inode/device identity checks. It accepts only endpoint,
-key and deployment, and never attaches raw parse/I/O errors. No legacy config
-or endpoint alias is retained.
+`azure.ts` requests `/openai/v1/realtime/client_secrets` with the server-held key,
+transcription-only configuration, PCM 24 kHz, empty prompt, no automatic turn
+detection and a 600-second credential lifetime. Provider requests reject redirects,
+have a 30-second deadline, bound response bodies and discard private errors.
+The returned WebSocket origin/path is locally constructed and strictly validated.
 
-`src/server/azure.ts` requests `/openai/v1/realtime/client_secrets` using the
-server-held API key, `session.type: "transcription"`, the configured
-`gpt-transcribe` deployment, captured context labeled as reference vocabulary,
-and `turn_detection: null`. It rejects redirects, combines cancellation and a
-30-second deadline, bounds provider JSON, and discards raw error bodies.
-It returns only the short-lived credential, expiry and locally constructed
-allowlisted WebRTC calls URL. No audio/transcript proxy or persistence exists.
-The label is 22 code points: with all 1,000 context code points the total prompt
-is 1,022, below Azure's 1,024-code-point bound. No-context sessions omit `prompt`.
+## Capture and network are independent
 
-`src/web/recorder.ts` unlocks Web Audio during the click. Credential issuance
-must succeed before microphone access. A new peer/data channel and initially
-silent audio destination are created per attempt. SDP is posted directly to
-Azure with the short-lived credential. Once the channel is open and initial
-buffer clearing is acknowledged, the microphone feeds the WebRTC audio track.
-Track-ended listeners are attached as soon as permission returns; context
-state is watched from creation, allowing the initial suspended-to-running
-transition but rejecting later suspension. Tracks remain disabled until a final
-audio-track `readyState` and context-state check. A shared 30-second preparation
-deadline covers permission, resume, SDP, channel open and buffer clear.
-An audio-clock gain boundary and wall timer cap recording at 120 seconds.
-Stop releases hardware, drains the final RTP audio for 250ms, then commits once.
-Only a bounded final transcript whose item ID matches that commit can complete.
-Deltas never mutate a draft. Final-before-ack ordering is tolerated; unrelated
-items, missing acknowledgements, errors and deadlines fail explicitly.
+- `transport.ts` caches credentials in activation-scoped memory for at most
+  one minute and stops reusing them 30 seconds before Azure expiry. Retry requests
+  fresh credentials, also picking up changed file configuration. Aborted requests
+  cannot populate the cache. Disposal clears it.
+- `capture.ts` initiates microphone permission and context resume in the click,
+  without waiting for credentials. It watches device/context failure from setup,
+  checks final readiness, and consumes the packaged worklet's ordered messages.
+- `capture-worklet.ts` and `pcm.ts` produce 24 kHz mono little-endian PCM16 chunks.
+  Native Web Audio resamples the requested 24 kHz context; the streaming encoder
+  also handles other context sample rates. Render-sample counting bounds the
+  recording to 120 seconds. Stop releases tracks immediately, flushes the tail,
+  then seals the append-only record. A missing flush acknowledgement fails rather
+  than claiming complete audio.
+- `socket.ts` sends prompt configuration and verifies `session.updated` before
+  sending any audio. No context means `prompt: ""`, never omission. The same
+  ordered cursor drains backlog and newly added chunks. Backpressure is bounded,
+  commit follows all chunks, and only a bounded final transcript matching the
+  committed item succeeds. A final arriving before the acknowledgement is held.
+- `recorder.ts` owns one capture and one active transport attempt. Network failure
+  while recording does not interrupt local capture. Manual retry creates another
+  connection/cursor over the same bytes, without reopening the microphone.
+  Connections close independently of draft insertion. No automatic reconnect,
+  retry, backend audio upload or disk persistence exists.
+- `speech.ts` owns the exact draft, original revision/selection/context and lease.
+  Failure releases the lease but retains replayable audio for that input only.
+  Retry reacquires a lease; replacement/navigation/cancellation destroys the
+  recording. Superseded completion callbacks cannot affect the new attempt.
 
-All tracks, peer/channel handlers, timers and contexts are released on finish,
-cancel or setup failure. Pending permission/SDP cannot revive a cancelled
-operation. Disconnect does not reconnect or replay audio. Runtime cancellation
-does not revoke an Azure credential or retract data already sent to Azure.
+Reused credentials may produce equal Azure session IDs despite isolated
+connections. Local object ownership and committed-item matching, not provider
+session IDs, prevent stale writes. Never log WebSocket URLs: the short-lived bearer
+appears in their query. Expiry blocks new connections, not necessarily open ones.
 
-`src/web/speech.ts` remains the activation-scoped state service owning draft
-identity, selection, revision, context capture, leases, cancellation and recovery.
-The actual `composerInput` Base retains native controlled props/events and React
-19 ref cleanup; the microphone is its sibling. The existing `composer` wrapper
-renders feedback after the whole row. Focus receipts remain draft/revision scoped.
-No business slot, private DOM lookup, copied editor or submission method exists.
-The public control-size token fixes the circular button's dimensions. Idle and
-recording use microphone/stop icons; all preparation/stopping/transcribing phases
-use a disabled, accessibly named busy spinner. There is no stage text, timer or
-busy-click cancellation. Error/notice/recovery feedback remains after the row;
-navigation, target invalidation and module disposal still cancel internally.
+## UI
 
-## Existing synthetic checks
+The `composerInput` wrapper renders the real Base and a fixed-size microphone
+sibling, preserving controlled props, native events and React 19 ref cleanup.
+The native send remains host-owned. Prompt/ask/plan and free-text gates are
+unchanged; File remains prompt-only on the left.
 
-`pnpm test` uses Node's existing built-in runner and TypeScript stripping, without
-Azure credentials, real microphone devices or production configuration:
+One circular button conveys all operational states: idle microphone, disabled
+startup spinner, recording stop square, disabled sending/transcription spinner,
+red manual retry. Accessible names and title include the safe failure reason.
+There is no timer, phase text, success/error panel or global error notification.
+Only draft-conflict text recovery uses the existing `composer` wrapper after the
+whole row; it cannot redirect insertion to another draft.
 
-- Config migration, strict origins/deployment fields, rereads, bounded regular
-  files, symlinks, safe failures and no legacy fallback.
-- Session-only requests, exact GA/provider configuration, contextual Unicode
-  limits, no key readback, bounded responses, cancellation and no retries.
-- Audio preparation without permission, expired credentials, late permission,
-  WebRTC offer cancellation, safe SDP rejection and resource cleanup.
-- Actual recorder plus service-lease regressions for device/context failures at
-  offer, remote description, channel open and buffer clear; missing events are
-  caught by final readiness checks. Initial resume and intentional stop do not
-  raise false failures; preparation and final deadlines release all ownership.
-- Buffer-clear/commit acknowledgement, final-before-ack, mismatched item IDs,
-  late completions, invalid/oversized/empty transcripts and provider errors.
-- Audio-clock gating, 120-second stop/commit, double stop, final timeout and
-  peer/channel/microphone/context failures.
-- Context provenance, native session identity and trailing 1,000 code points.
-- Prompt/ask/plan exact draft leases, manual edits, reused request IDs, pending/
-  unconfirmed/peer blocks, cancellation/revocation, recovery and caret receipts.
-- Native ref composition, middleware/capability checks, package closure,
-  source/SDK identity and reproducibility.
+## Existing validation tools
 
-Synthetic checks do not establish real hardware support, network reachability,
-provider availability, recognition quality or billing. Before release, exercise
-target-device permission grant/deny, cancellation during permission/negotiation,
-Safari/Firefox/Chromium, interrupted networking, 120-second capture, cancelled
-late finals and recovery. Credential expiry before negotiation requires a new
-explicit recording attempt; no automatic refresh/retry occurs.
+`pnpm test` uses Node's built-in runner and TypeScript stripping. Tests use
+synthetic permission, Web Audio, worklet messages, sockets and backend responses,
+never production configuration or user recordings. They cover:
 
-CI prepares the fixed SDK, installs frozen dependencies, and runs typecheck,
-synthetic tests, clean-source build/package and exact archive verification.
-It has read permissions only and no credential-backed/cloud integration.
-An optional real-provider smoke requires explicit authorization, synthetic audio,
-an isolated resource/config directory, no credential logging and full cleanup.
+- Context-free credential requests, key isolation, config validation, expiry,
+  cache lifetime, refresh, cancellation and strict WebSocket endpoint validation.
+- Capture before network readiness, prompt acknowledgement/clearing, stopped
+  backlog, tail flushing, live append order and replay of identical retained data.
+- PCM resampling, short tails, render-sample limit, lifecycle cancellation,
+  initial resume, silent readiness failures, devices and bounded waits.
+- Safe provider errors including rate limits, invalid/mismatched/empty results,
+  stale callbacks, fresh retry cursors, cleanup and actual service lease release.
+- Single-button states, no notification bars, native props/ref/IME preservation,
+  exact draft/revision conflicts, retained recovery and no automatic submission.
+- Source/SDK identity, package closure and reproducibility.
 
-## Paired host regression
+Run `pnpm typecheck`, `pnpm test`, then `pnpm build`. Packaging requires a fresh
+build from clean committed source; use a new output directory and the existing
+package verifier. Dependencies and the SDK pin are unchanged.
 
-The unchanged public API pin is `d752dd6a016f8ff84235c4cd8850e2b63778bf1b`,
-SDK 0.2.5. Prepare it with the existing exporter, install from the frozen
-lockfile and build the module. From the host branch with the current paired
-fixture, run:
+The paired host regression imports the actual compiled middleware:
 
 ```sh
 COCKPIT_TEST_SPEECH_ENTRY=/absolute/cockpit-speech/dist/web/index.js \
@@ -108,9 +94,13 @@ COCKPIT_TEST_SPEECH_ENTRY=/absolute/cockpit-speech/dist/web/index.js \
   src/components/Thread.lifecycle.test.ts
 ```
 
-This mounts the production Composer and actual compiled middleware with synthetic
-Web Audio, WebRTC/data-channel, permission and HTTP providers. It checks native
-send leases, natural component order, feedback placement, React 19 cleanup,
-manual-edit recovery and caret/focus. The host's existing Chat Lab remains the
-browser surface; do not create a parallel UI app. The host API PR must merge
-before this consumer PR; a reproducible feature pin is not a published release.
+Use the host's existing Chat Lab for browser interaction, with synthetic
+microphone/credential/socket fixtures. Do not build a parallel demo app or
+connect the Lab to native sessions. Lab CSP intentionally excludes Azure.
+
+Synthetic success is not evidence of physical microphones, all browsers,
+provider availability, recognition quality or billing. Real cloud smoke needs
+explicit authorization and synthetic audio. Protocol experiments established
+browser ephemeral WebSocket authentication, token reuse/expiry, prompt clearing,
+buffered sending and replay; long-silence recognition produced errors and must
+not be called an accuracy pass. No cloud request is needed for ordinary CI.

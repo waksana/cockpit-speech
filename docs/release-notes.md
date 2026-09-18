@@ -1,4 +1,42 @@
-# Cockpit Speech 0.1.1
+# Cockpit Speech 0.2.0
+
+Unreleased follow-up to waksana/cockpit#51. No tag, release, installation or
+service restart is performed by this source change.
+
+## Buffered browser-direct dictation
+
+Replaces WebRTC with Azure WebSocket transcription. Microphone permission/capture
+starts independently of credentials and network setup. A packaged AudioWorklet
+keeps up to 120 seconds of PCM in browser memory. Every connection explicitly
+sets and confirms this recording's prompt (including empty prompt), then drains
+backlog and new chunks. Stop flushes the local tail before one commit.
+
+The fixed circular button now represents startup, recording, finalization and
+failure: microphone -> spinner -> stop -> spinner -> microphone, or red retry
+on failure. Manual retry replays the same bytes and original context without a
+new microphone capture. There are no normal/error notification bars, automatic
+retries, audio persistence or automatic sends. Draft-conflict text recovery
+remains separate. Target cancellation clears the retained audio.
+
+## Breaking module connection contract
+
+`POST /session` accepts only `{}`; context is sent directly by the browser, never
+to the backend. The response is `{clientSecret, expiresAt, socketUrl, deployment}`.
+The old WebRTC `callsUrl` is removed without an alias. Frontend/backend must be
+upgraded as one archive. `azure-openai.json` remains endpoint/key/deployment only.
+
+Credentials are memory-cached for at most one minute, with a 30-second expiry
+margin; retry forces a fresh configuration/credential request. Cached credentials
+may briefly lag config-file changes. Retrying a previously committed recording
+can duplicate Azure charges. Azure session ID is not a local ownership key.
+
+The SDK remains pinned to `d752dd6a016f8ff84235c4cd8850e2b63778bf1b` / 0.2.5.
+The host API is already merged; no host production/API change is needed.
+The paired host regression fixture follows the new browser protocol.
+
+---
+
+# Historical: Cockpit Speech 0.1.1
 
 Unreleased paired migration for [waksana/cockpit#51](https://github.com/waksana/cockpit/issues/51).
 No tag, Release, installation or deployment is performed by this source change.

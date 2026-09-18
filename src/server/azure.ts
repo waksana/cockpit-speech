@@ -1,32 +1,29 @@
-import { isRecord, MAX_CONTEXT_POINTS, MAX_RESPONSE_BYTES, SpeechError } from '../shared/limits.ts';
+import { isRecord, MAX_RESPONSE_BYTES, SpeechError } from '../shared/limits.ts';
 import { parseSession } from '../shared/session.ts';
 import type { SpeechSession } from '../shared/session.ts';
 import type { AzureConfig } from './config.ts';
 
-export interface SessionInput { context?: string }
+export type SessionInput = Record<string, never>;
 export interface SessionIssuer {
   issue(config: AzureConfig, input: SessionInput, signal: AbortSignal): Promise<SpeechSession>;
 }
 
 export function parseInput(value: unknown): SessionInput {
-  const invalid = () => new SpeechError('REQUEST_INVALID', `请求只允许可选 context（最多 ${MAX_CONTEXT_POINTS} 个 Unicode 字符），不接受音频、模型或凭据。`);
-  if (!isRecord(value) || Object.keys(value).some(key => key !== 'context')
-    || (value.context !== undefined && (typeof value.context !== 'string'
-      || value.context.length > MAX_CONTEXT_POINTS * 2 || [...value.context].length > MAX_CONTEXT_POINTS))) throw invalid();
-  return typeof value.context === 'string' && value.context.trim() ? { context: value.context } : {};
+  if (!isRecord(value) || Object.keys(value).length) {
+    throw new SpeechError('REQUEST_INVALID', '凭据请求只接受空对象，不接受上下文、音频、模型或凭据。');
+  }
+  return {};
 }
 
-export function definition(deployment: string, context?: string) {
+export function definition(deployment: string) {
   return {
+    expires_after: { anchor: 'created_at', seconds: 600 },
     session: {
       type: 'transcription',
       audio: {
         input: {
-          transcription: {
-            model: deployment,
-            // Azure caps the whole prompt at 1,024 code points, including this 22-point label.
-            ...(context ? { prompt: `Reference vocabulary:\n${context}` } : {}),
-          },
+          format: { type: 'audio/pcm', rate: 24000 },
+          transcription: { model: deployment, prompt: '' },
           turn_detection: null,
         },
       },
@@ -64,14 +61,14 @@ export async function boundedJson(response: Response): Promise<unknown> {
 
 export function azureSessionIssuer(fetcher: typeof fetch = fetch, timeoutMs = 30_000): SessionIssuer {
   return {
-    async issue(config, input, signal) {
+    async issue(config, _input, signal) {
       const timeout = AbortSignal.timeout(timeoutMs);
       const combined = AbortSignal.any([signal, timeout]);
       try {
         combined.throwIfAborted();
         const response = await fetcher(`${config.endpoint}/openai/v1/realtime/client_secrets`, {
           method: 'POST', headers: { 'api-key': config.key, 'Content-Type': 'application/json' },
-          body: JSON.stringify(definition(config.deployment, input.context)), redirect: 'error', signal: combined,
+          body: JSON.stringify(definition(config.deployment)), redirect: 'error', signal: combined,
         });
         if (!response.ok) {
           await response.body?.cancel();
@@ -84,7 +81,8 @@ export function azureSessionIssuer(fetcher: typeof fetch = fetch, timeoutMs = 30
         }
         const result = parseSession({
           clientSecret: value.value, expiresAt: value.expires_at,
-          callsUrl: `${config.endpoint}/openai/v1/realtime/calls`,
+          socketUrl: `${config.endpoint.replace('https:', 'wss:')}/openai/v1/realtime?intent=transcription`,
+          deployment: config.deployment,
         });
         combined.throwIfAborted();
         return result;

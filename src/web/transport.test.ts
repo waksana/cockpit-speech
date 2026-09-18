@@ -3,46 +3,56 @@ import { test } from 'node:test';
 import { sessionClient } from './transport.ts';
 import { MAX_RESPONSE_BYTES } from '../shared/limits.ts';
 
-const session = () => ({ clientSecret: 'ephemeral-fixture', expiresAt: Math.floor(Date.now() / 1000) + 60,
-  callsUrl: 'https://synthetic.openai.azure.com/openai/v1/realtime/calls' });
-test('browser asks only for a session with context, never sends audio or credentials to the module', async () => {
+const session = () => ({ clientSecret: 'ephemeral-fixture', expiresAt: Math.floor(Date.now() / 1000) + 600,
+  socketUrl: 'wss://synthetic.openai.azure.com/openai/v1/realtime?intent=transcription', deployment: 'dictation' });
+const signal = () => new AbortController().signal;
+test('credential requests never include context/audio; cached token expires early and config staleness is bounded', async t => {
+  t.mock.timers.enable({ apis: ['Date'] });
+  let calls = 0;
   const client = sessionClient(async (path, init) => {
-    assert.equal(path, '/session'); assert.equal(init?.method, 'POST');
-    assert.ok(init?.signal instanceof AbortSignal);
-    assert.deepEqual(JSON.parse(String(init?.body)), { context: 'context' });
+    calls++; assert.equal(path, '/session'); assert.equal(init?.body, '{}');
     return Response.json(session());
   });
-  assert.equal((await client('context', new AbortController().signal)).clientSecret, 'ephemeral-fixture');
+  await client(signal()); await client(signal());
+  assert.equal(calls, 1);
+  t.mock.timers.tick(60_001);
+  await client(signal()); assert.equal(calls, 2);
+  await client(signal(), true); assert.equal(calls, 3, 'manual retry refreshes configuration/credentials');
 });
-test('each explicit start rereads configuration; credential cancellation cannot start recording', async () => {
-  let configured = false, requests = 0;
-  const client = sessionClient(async () => {
-    requests++;
-    return configured ? Response.json(session())
-      : Response.json({ error: { code: 'CONFIG_UNAVAILABLE', message: '请创建 azure-openai.json。' } }, { status: 503 });
-  });
-  await assert.rejects(client(undefined, new AbortController().signal), /azure-openai\.json/);
-  configured = true;
-  await client(undefined, new AbortController().signal);
-  assert.equal(requests, 2);
+test('near-expiry credentials are not reused; aborted or disposed requests cannot populate cache', async () => {
+  let calls = 0;
+  const client = sessionClient(async () => { calls++; return Response.json({ ...session(), expiresAt: Math.floor(Date.now() / 1000) + 20 }); });
+  await client(signal()); await client(signal()); assert.equal(calls, 2);
+  const lifetime = new AbortController();
+  const disposable = sessionClient(async () => Response.json(session()), lifetime.signal);
+  await disposable(signal()); lifetime.abort();
+  await assert.rejects(disposable(signal()), { name: 'AbortError' });
   const controller = new AbortController();
-  await assert.rejects(sessionClient(async (_path, init) => {
-    controller.abort(); assert.equal(init?.signal?.aborted, true); return Response.json(session());
-  })(undefined, controller.signal), { name: 'AbortError' });
+  await assert.rejects(sessionClient(async () => {
+    controller.abort(); return Response.json(session());
+  })(controller.signal), { name: 'AbortError' });
 });
-test('credentials must be current and target the fixed Azure WebRTC path', async () => {
+test('safe configuration failures can be retried and never cache failures', async () => {
+  let configured = false;
+  const client = sessionClient(async () => configured ? Response.json(session())
+    : Response.json({ error: { code: 'CONFIG_UNAVAILABLE', message: '请创建 azure-openai.json。' } }, { status: 503 }));
+  await assert.rejects(client(signal()), /azure-openai\.json/);
+  configured = true; await client(signal());
+});
+test('credentials must target exactly the allowlisted Azure WebSocket endpoint', async () => {
   for (const value of [{}, { ...session(), clientSecret: '' }, { ...session(), expiresAt: 1 },
-    { ...session(), callsUrl: 'https://example.com/calls' },
-    { ...session(), callsUrl: 'https://synthetic.openai.azure.com/openai/v1/realtime/calls?other=true' },
-    { ...session(), callsUrl: 'https://synthetic.openai.azure.com:443/openai/v1/realtime/calls' }]) {
-    await assert.rejects(sessionClient(async () => Response.json(value))(undefined, new AbortController().signal), { code: 'SESSION_INVALID' });
+    { ...session(), socketUrl: 'wss://example.com/' },
+    { ...session(), socketUrl: session().socketUrl + '&Authorization=stolen' },
+    { ...session(), socketUrl: session().socketUrl.replace('.com/', '.com:443/') },
+    { ...session(), deployment: '../invalid' }]) {
+    await assert.rejects(sessionClient(async () => Response.json(value))(signal()), { code: 'SESSION_INVALID' });
   }
 });
 test('malformed/oversized responses and network errors remain safe', async () => {
   for (const response of [new Response('invalid'), new Response(new Uint8Array(MAX_RESPONSE_BYTES + 1))]) {
-    await assert.rejects(sessionClient(async () => response)(undefined, new AbortController().signal));
+    await assert.rejects(sessionClient(async () => response)(signal()));
     assert.equal(response.body?.locked, false);
   }
-  await assert.rejects(sessionClient(async () => { throw new Error('PRIVATE'); })(undefined, new AbortController().signal),
+  await assert.rejects(sessionClient(async () => { throw new Error('PRIVATE'); })(signal()),
     error => error instanceof Error && !error.message.includes('PRIVATE'));
 });

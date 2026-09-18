@@ -1,37 +1,45 @@
 # Cockpit Speech
 
-Standalone, GPL-3.0-only Cockpit dictation module using **Azure OpenAI
-`gpt-transcribe`, browser-direct WebRTC and captured chat context**. The backend
-only exchanges its resource key for a short-lived client credential. It does not
-receive audio or transcripts. No Entra business authentication, speech SDK,
-postprocessor, settings page, menu entry or automatic submission is required.
+Standalone, GPL-3.0-only Cockpit dictation using **Azure OpenAI gpt-transcribe,
+browser-direct WebSocket, local audio buffering and captured chat context**.
+The backend only exchanges its resource key for short-lived credentials; it
+never receives audio, context or transcripts. No Entra business authentication,
+speech SDK, postprocessor, settings page or automatic submission is required.
 
-The microphone follows the **actual editor** and precedes native send, including
-prompt, ask and plan inputs. Click to connect and record; click the square to
-stop, commit that audio turn, and insert its final transcript at the captured
-selection. `gpt-transcribe` starts transcription after the turn is committed;
-this is not live captions or a duplex voice assistant. Review the text and send
-it with Cockpit's normal action. Native free-text restrictions leave the
-microphone visible but disabled.
+## One-button dictation
 
-The circular button keeps the same size in every phase: microphone when idle,
-disabled spinner while acquiring credentials/permission/connection, square only
-when ready to record, then disabled spinner while stopping/transcribing.
-**Wait for the square before speaking.** There is no timer, adjacent phase text,
-retry state or cancel action on the busy button. Failures restore the microphone
-and show the existing error panel; clicking again starts a new recording, never
-replays previous audio. Conflict recovery remains available in the result panel.
+The fixed circular microphone follows the actual editor and precedes native
+send, for prompt, ask and plan inputs. File stays on the left and prompt-only.
+Native free-text restrictions leave the microphone visible but disabled.
 
-## Configuration — file only
+**Microphone -> disabled spinner (starting microphone) -> stop square
+(local recording) -> disabled spinner (sending/transcribing) -> microphone.**
+Wait for the square before speaking. Permission and device startup still take
+time, but credentials and networking no longer delay local recording. There is
+no timer, adjacent phase text, or success/error notification panel.
 
-Create **`<dataRoot>/azure-openai.json`**, outside the immutable module install
-directory. The host supplies `dataRoot` following `COCKPIT_HOME`; its default is:
+Failure changes that same button to a red retry icon with an accessible error
+description and tooltip. Click to replay the retained recording; it does not
+open the microphone again. A failed microphone startup or recording shorter
+than 100 ms has no replayable audio, so retry starts a new capture instead.
+There is no automatic retry or busy-click cancellation.
+
+`gpt-transcribe` recognizes the committed audio turn, not live captions or a
+duplex conversation. Successful text is inserted at the original selection,
+never sent automatically. If the draft changed, its text is not overwritten:
+the separate result recovery field offers copy, explicit insertion at the
+current caret, or discard. Only this conflict recovery can add a panel.
+
+## File-only configuration
+
+Create **`<dataRoot>/azure-openai.json`**, outside the immutable module install.
+The host supplies dataRoot; the default is:
 
 ```text
 ~/.cockpit/modules/data/cockpit-speech/azure-openai.json
 ```
 
-Use exactly these three fields; the values below are placeholders:
+Use exactly three fields (these are placeholders):
 
 ```json
 {
@@ -41,119 +49,93 @@ Use exactly these three fields; the values below are placeholders:
 }
 ```
 
-Deploy **`gpt-transcribe`** in a supported Azure region, then use that deployment's
-name, not an arbitrary GPT chat model. `deployment` may differ from the model name.
-Replace the resource placeholder with its actual **lowercase** resource name.
-The endpoint must be its HTTPS origin, optionally ending in `/`, without a port,
-path, query or credentials. Only `<resource>.openai.azure.com` is accepted;
-private/custom hosts, sovereign clouds and arbitrary URLs are not supported.
-Region availability, quota and model access are Azure dependencies.
+Deploy `gpt-transcribe`, then supply the deployment name, which may differ from
+the model name. Use a lowercase resource hostname. Only public Azure OpenAI HTTPS
+origins are supported: no custom/sovereign hosts, ports, credentials, query or
+path. A trailing slash is accepted. Keep the directory private and the regular,
+non-symlink UTF-8 file at mode `0600`; the file is bounded to 16 KiB. No environment
+fallback, legacy `azure-speech.json`, resource-key readback or settings UI exists.
 
-```sh
-chmod 600 ~/.cockpit/modules/data/cockpit-speech/azure-openai.json
-```
+The backend rereads the file on each credential request. The browser reuses
+credentials for at most one minute, and never within 30 seconds of their
+`expiresAt`. Thus on-disk changes can take up to one minute to affect new
+recordings. Explicit retry always requests fresh credentials/configuration.
+Already-open connections retain their original configuration. Reloading or
+unloading the module clears its memory cache; it does not revoke Azure tokens.
 
-For nondefault `COCKPIT_HOME`, use the actual host-supplied data directory.
-The file must be a regular, non-symlink UTF-8 JSON file, at most 16 KiB. The backend
-rereads it on every explicit recording attempt. Missing/malformed configuration
-or failed credential issuance is shown **before microphone permission/capture**.
-Activation does not require the file. Correct it and explicitly start again;
-there is no automatic retry, environment fallback, key readback or setup UI.
+**0.2.0 connection contract break:** `POST /session` now accepts only `{}` and
+returns `{clientSecret, expiresAt, socketUrl, deployment}`. Context is no longer
+accepted. The old WebRTC `callsUrl` has no alias. Frontend/backend assets must
+come from the same module archive. The three-field configuration is unchanged.
 
-**Breaking migration:** `azure-speech.json` and its Speech resource key are no
-longer used. There is no legacy-file fallback, audio-upload `/transcribe` route,
-or old `/config-ready` alias. The only module route is `POST /session`, accepting
-optional context and returning a short-lived credential plus its expiry and
-validated Azure WebRTC URL. The resource key never reaches the browser.
+## Buffering, privacy and retry
 
-## Privacy and context
+The browser starts capture while obtaining credentials and opening a WebSocket.
+A packaged AudioWorklet records mono PCM16 at 24 kHz into an append-only memory
+record (at most 120 seconds / 5.76 MB of raw audio). Each connection first sends
+`session.update`, including this recording's prompt or an explicit empty prompt,
+and checks the effective configuration in `session.updated`. Only then does it
+send the backlog and new chunks with bounded WebSocket backpressure.
 
-Pressing record captures the optional **last 1,000 Unicode code points** of the
-most recent eligible completed root assistant message, after trimming outer
-whitespace. Eligibility requires matching native session origin, a nonblank
-native message ID, no agent ID or subtype, and nonblank text. User/tool/system
-messages, children, subagents, skill output and incomplete/unknown-origin
-messages are excluded. The public read-only chat window supplies context, not
-write authority. No DOM scraping or additional history fetch occurs.
+Stop immediately releases the microphone, flushes the worklet's tail, sends all
+remaining chunks and commits once. Stop is also valid before the network is
+ready. On failure, sent chunks are still retained. Manual retry uses a new
+connection and a cursor at the beginning of the same recording, with the same
+captured context; it never appends ambiguously to a failed connection.
 
-A stale, disconnected, unavailable or different-session window contributes no
-context. Partial windows can contribute eligible loaded messages. Context is
-captured at the initial click, not refreshed during permission or transcription.
-This is module policy, not a provider maximum or a summary.
+The excerpt is the **last 1,000 Unicode code points** of the newest eligible
+completed root assistant reply, captured at the first click. Eligibility needs
+the matching native session origin, nonblank native message ID and text, and no
+agent ID or subtype. User/tool/system messages, children, subagents, skill output
+and incomplete/unknown-origin messages are excluded. Stale/unavailable windows
+contribute no context. The module uses the public read-only chat window, without
+DOM scraping or fetching additional history.
 
-The backend sends that context to Azure **when requesting the short-lived
-credential, before recording starts**. The prompt labels it `Reference vocabulary:`,
-not an answer request. The 22-code-point label plus the complete 1,000-code-point
-excerpt fits Azure's **1,024-code-point total prompt limit**. Without context,
-the prompt is omitted; the session remains transcription-only. Once the connection
-is ready, microphone audio flows directly
-from the browser to Azure **during recording**, not only after stop. Cancellation
-stops further transmission but cannot retract already-transmitted audio/context
-or provider charges. The short-lived credential is not a one-use billing quota;
-protect access to the host and module endpoint.
+The `Reference vocabulary:\n` prefix plus context is at most 1,022 code points.
+This prompt and all audio go **directly from the browser to Azure**. Backend
+credential requests contain no user context. Audio, transcripts and credentials
+are never persisted or logged by the module. Audio memory is cleared on success,
+target invalidation, navigation, hiding the page, disconnect or module unload.
+Failed audio stays only for the original live input, until retry or cancellation;
+reload loses it. Cancel cannot retract already-transmitted data or charges.
 
-Audio and transcripts are not uploaded through Cockpit or its file module,
-written to disk, or logged by this module. Credentials are held in memory only.
-Azure processing, retention, geography and billing follow your resource/model
-terms; a resource location is not a promise that a Global deployment processes
-only there. Recognition can be wrong or hallucinate despite the prompt.
-There is no second model or local rewriting pass.
+Retries after an uncertain commit can be billed again. Token caching does not
+raise deployment rate limits. Azure processing, retention, geography and pricing
+follow the resource/model terms; Global deployments are not a promise of local
+processing. Recognition can be incorrect, including hallucinations during
+silence. There is no second model or local rewriting pass.
 
 ## Browser and draft safety
 
-Use HTTPS (localhost is allowed), Web Audio, WebRTC and microphone permission.
-Any deployment CSP or network policy must allow the configured Azure OpenAI
-origin and WebRTC connectivity; Cockpit does not proxy around blocked connections.
-The click unlocks audio synchronously; permission follows successful credential
-issuance. A fresh WebRTC connection is created for each recording. A silent
-output track is negotiated first, then microphone audio is admitted only after
-the initial buffer-clear acknowledgement and a final live-track/running-context
-check. Acquired microphone tracks stay disabled during preparation; no user
-audio is connected, buffered or sent to Azure before readiness. Device/context
-failure listeners cover preparation as well as recording. The browser may open
-the hardware to obtain permission; that is not a ready-to-record indication.
-WebRTC negotiates encoding/resampling;
-there is no WAV buffer, AudioWorklet asset or fixed hardware sample-rate
-requirement. Microphone audio is not played locally.
+Requires HTTPS (localhost allowed), Web Audio/AudioWorklet, WebSocket and microphone
+permission. CSP/network policy must allow packaged worklet assets and the configured
+Azure `wss://` origin. Cockpit does not proxy around blocked connections.
+The short-lived bearer is carried in the WebSocket URL's `Authorization` query
+parameter; never log socket URLs or include them in diagnostic reports.
 
-The maximum recording duration remains **120 seconds**. Audio-render-clock
-gating bounds transmission even if the JavaScript timer is delayed; the wall
-timer stops capture and automatically commits the turn. Stop immediately
-releases the microphone, briefly drains remaining audio over the silent track,
-and commits once. Microphone permission, audio resume and connection setup share
-a 30-second deadline after credential issuance;
-final transcription is bounded to 90 seconds after commit. Responses/events and
-recognized text are bounded. No automatic reconnect, replay or retry occurs.
+Audio-render sample counting enforces the 120-second cap independently of delayed
+UI timers; a wall timer also requests stop. Microphone/worklet startup and socket
+configuration each have 30-second deadlines, credential exchange has a 35-second
+browser deadline, tail flush is bounded to 2 seconds, stalled upload to 30 seconds,
+and final transcription to 90 seconds. All failure paths release hardware and
+connections. Device/context listeners cover initialization and capture; normal
+initial resume and deliberate stop do not create false failures.
 
-Only a final transcription matching this connection's acknowledged committed
-item may write text. Incremental deltas, unrelated items, late events and stale
-operations never write the draft. Stopping or expiry of a short-lived credential
-does not substitute for closing the peer: cancellation explicitly releases
-tracks, data channel, peer, audio context and draft lease.
+The exact draft lifetime, session, purpose, revision, selection and context stay
+with the recording. A lease blocks native send while capturing or transcribing,
+and is released on failure, finish or cancellation. Retry reacquires the original
+draft lease. Manual edits win; recovery never follows a replacement input or a
+reused request ID. Old connection callbacks and superseded completions cannot
+write text. Azure can reuse a session ID for the same credential, so that ID is
+not used as a local ownership key. Final text must match the committed item.
 
-Recording captures the exact draft lifetime, session, purpose, revision and
-selection. A lease blocks native send while connecting/recording/transcribing.
-Cancellation, input replacement, navigation, disconnect, page hiding, unmount
-and module abort release it. A late permission grant is stopped immediately.
-Manual edits win: conflicted recognized text remains in a read-only recovery
-field. **Copy text** or **Insert at current cursor** is available only as
-appropriate for the original still-live input; recovery never deletes a selected
-range, follows another session, or follows a reused request ID. It is in-memory
-only and is lost on reload/unload unless copied or inserted.
+## Development and package
 
-## Build and package
-
-Requires **Node 24.20.0**, **pnpm 10.34.5**, Git and tar. The exact SDK pin remains
-`d752dd6a016f8ff84235c4cd8850e2b63778bf1b` (`@cockpit/module-api` 0.2.5),
-recorded in `tooling/host-sdk.json`. This is an unreleased host-source pairing,
-not a claim that an existing release supports the input capabilities.
-The provider migration requires no additional host API.
-
-Frontend API v2/UI v1, `chatWindowVersion: 1` and `composerInputVersion: 1` are
-required independently. Speech 0.1.1 wraps the real controlled textarea,
-preserving events/ref/selection; its feedback follows the complete `composer`
-row. File remains prompt-only on the left, native send stays on the right.
-Speech 0.1.0 and hosts without the real input contract are incompatible.
+Requires Node **24.20.0** and pnpm **10.34.5**. The immutable SDK pin remains
+`d752dd6a016f8ff84235c4cd8850e2b63778bf1b` (`@cockpit/module-api` 0.2.5).
+The host API from waksana/cockpit#52 is already merged; this transport change
+requires no host API change. Frontend API v2/UI v1, `chatWindowVersion: 1` and
+`composerInputVersion: 1` remain independently required.
 
 ```sh
 node scripts/sdk.mjs prepare /path/to/clean-pinned-cockpit
@@ -161,17 +143,13 @@ pnpm install --frozen-lockfile --ignore-scripts
 pnpm typecheck
 pnpm test
 pnpm build
-# Packaging requires committed, clean source and a fresh build.
-pnpm package
-node scripts/verify-package.mjs module-output/cockpit-speech-0.1.1.tgz
+# After committing clean source; use a new output directory.
+node scripts/package.mjs module-output-0.2.0
+node scripts/verify-package.mjs module-output-0.2.0/cockpit-speech-0.2.0.tgz
 ```
 
-The exporter verifies the exact clean host commit. Generated SDK/build/package
-outputs are ignored. There are no runtime npm dependencies. Archives contain
-the manifest, compiled runtime/assets/licenses and source/SDK build receipt,
-never configuration, credentials, tests or recordings. Install only through
-Cockpit's existing module flow; this repository does not deploy the archive.
-
-See [release notes](docs/release-notes.md), [development](docs/development.md),
-[provenance](NOTICE.md), [security](SECURITY.md) and the
-[Azure OpenAI WebRTC guide](https://learn.microsoft.com/en-us/azure/foundry/openai/how-to/realtime-audio-webrtc).
+Archives contain runtime code, worklet assets, licenses and exact source/SDK
+receipts, never recordings or configuration. Install through the existing host
+module flow; these commands do not deploy. See [development](docs/development.md),
+[release notes](docs/release-notes.md), [provenance](NOTICE.md) and
+[security](SECURITY.md).
