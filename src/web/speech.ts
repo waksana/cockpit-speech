@@ -2,7 +2,7 @@ import type { ChatWindowSnapshot, DraftPurpose, HostSnapshot, ModuleDraft, Reado
 import { SpeechError } from '../shared/limits.ts';
 import { recentContext } from './context.ts';
 import type { Recording, RecordingPreparation, PrepareRecording } from './recorder.ts';
-import type { Transcribe } from './transport.ts';
+import type { CreateSession } from './transport.ts';
 
 export interface Selection { start: number; end: number }
 export interface Target { draft: ModuleDraft; disabled: boolean; sendBlocked: boolean; selection(): Selection }
@@ -25,8 +25,7 @@ export interface SpeechOptions {
   host: ReadonlyState<HostSnapshot>;
   chatWindow: ReadonlyState<ChatWindowSnapshot>;
   prepare: PrepareRecording;
-  ready(signal: AbortSignal): Promise<void>;
-  transcribe: Transcribe;
+  session: CreateSession;
   report(error: Error): void;
 }
 const purposeKey = (purpose: DraftPurpose) => purpose.kind === 'prompt' ? 'prompt' : `${purpose.kind}:${purpose.requestId}`;
@@ -121,10 +120,10 @@ export class SpeechService {
         operation.limited = true;
         if (this.current(operation) && this.state.phase === 'recording') void this.stop();
       });
-      await this.options.ready(operation.controller.signal);
+      const session = await this.options.session(operation.context, operation.controller.signal);
       if (!this.current(operation)) return;
       this.update({ phase: 'permission' });
-      const recording = await operation.preparation.start();
+      const recording = await operation.preparation.start(session);
       if (!this.current(operation)) { recording.cancel(); return; }
       operation.recording = recording;
       this.update({ phase: 'recording' });
@@ -136,10 +135,9 @@ export class SpeechService {
     if (!operation?.recording || this.state.phase !== 'recording') return;
     this.update({ phase: 'stopping' });
     try {
-      const audio = await operation.recording.stop();
-      if (!this.current(operation)) return;
-      this.update({ phase: 'transcribing' });
-      const text = await this.options.transcribe(audio, operation.context, operation.controller.signal);
+      const text = await operation.recording.stop(() => {
+        if (this.current(operation)) this.update({ phase: 'transcribing' });
+      });
       if (!this.current(operation)) return;
       this.finish(operation);
       const recovery = { ...operation.identity, text };

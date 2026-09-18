@@ -3,7 +3,7 @@ import type { Ref } from 'react';
 import { icons } from './icons.ts';
 import { prepareRecording } from './recorder.ts';
 import { SpeechService } from './speech.ts';
-import { readinessClient, transcriptionClient } from './transport.ts';
+import { sessionClient } from './transport.ts';
 
 export function composeEditorRef(local: { current: HTMLTextAreaElement | null }, inherited?: Ref<HTMLTextAreaElement>): (node: HTMLTextAreaElement | null) => void | (() => void) {
   return node => {
@@ -26,8 +26,7 @@ export const activate: ActivateFrontend = context => {
     id: 'speech',
     create: () => new SpeechService({
       signal: context.signal, host: context.state.host, chatWindow: context.state.chatWindow,
-      prepare: prepareRecording, ready: readinessClient(context.request),
-      transcribe: transcriptionClient(context.request), report: context.report,
+      prepare: prepareRecording, session: sessionClient(context.request), report: context.report,
     }),
     dispose: service => service.dispose(),
   }).get();
@@ -41,10 +40,10 @@ export const activate: ActivateFrontend = context => {
     const state = React.useSyncExternalStore(speech.subscribe, speech.getSnapshot);
     React.useSyncExternalStore(context.state.host.subscribe, context.state.host.getSnapshot);
     const active = state.phase !== 'idle';
-    const progress = state.phase === 'checking' ? '正在检查语音配置…'
-      : state.phase === 'permission' ? '等待麦克风权限…'
-        : state.phase === 'recording' ? '正在录音，点击停止后转写；两分钟后自动停止并转写。'
-          : state.phase === 'stopping' ? '正在整理录音…' : state.phase === 'transcribing' ? '正在通过 Azure Speech 转写…' : state.notice;
+    const progress = state.phase === 'checking' ? '正在获取 Azure OpenAI 短期凭据…'
+      : state.phase === 'permission' ? '正在连接 Azure 并准备麦克风…'
+        : state.phase === 'recording' ? '正在向 Azure 直传音频，点击停止后转写；两分钟后自动停止并转写。'
+          : state.phase === 'stopping' ? '正在提交最后一段音频…' : state.phase === 'transcribing' ? '正在通过 gpt-transcribe 转写…' : state.notice;
     const recovery = state.recovery;
     return (active || state.error || state.notice || recovery) ? h('section', { className: 'cockpit-speech-panel', 'aria-label': '语音输入' },
       state.error ? h('p', { role: 'alert' }, state.error) : null,

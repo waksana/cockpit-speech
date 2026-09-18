@@ -59,20 +59,24 @@ function fixture(options: { permission?: boolean; purpose?: DraftPurpose; ready?
   let capturedSignal: AbortSignal | undefined;
   let recorderFailure!: (error: SpeechError) => void;
   const recording: Recording = {
-    stop: async () => { stops++; return new Uint8Array([1]); },
+    stop: async committed => { stops++; requests++; committed?.(); return result.promise; },
     cancel: () => { cancelled++; },
   };
   const service = new SpeechService({
     signal: controller.signal, host, chatWindow,
-    prepare: (_signal, fail, limit) => {
+    prepare: (signal, fail, limit) => {
+      capturedSignal = signal;
       recorderFailure = fail; limitReached = limit;
       return {
         start: async () => { captures++; return options.permission ? permission.promise : recording; },
         cancel: () => { preparationsCancelled++; },
       };
     },
-    ready: async signal => { readyCalls++; await options.ready?.(signal); },
-    transcribe: async (_audio, context, signal) => { requests++; capturedContext = context; capturedSignal = signal; return result.promise; },
+    session: async (context, signal) => {
+      readyCalls++; capturedContext = context;
+      await options.ready?.(signal);
+      return { clientSecret: 'ephemeral-fixture', expiresAt: 2_000_000_000, callsUrl: 'https://synthetic.openai.azure.com/openai/v1/realtime/calls' };
+    },
     report: error => reports.push(error),
   });
   service.setTarget({ draft: original, disabled: false, sendBlocked: false, selection: () => ({ start: 6, end: 11 }) });
@@ -165,7 +169,7 @@ test('permission late grants are cancelled after input loss or module abort, wit
     assert.equal(f.service.getSnapshot().phase, 'idle', cause);
   }
 });
-test('cancelled HTTP completion never writes to the original or replacement draft', async t => {
+test('cancelled transcription completion never writes to the original or replacement draft', async t => {
   const f = fixture(); t.after(() => f.service.dispose());
   await f.service.start();
   const stop = f.service.stop(); await Promise.resolve();
@@ -176,7 +180,7 @@ test('cancelled HTTP completion never writes to the original or replacement draf
   assert.equal(f.service.getSnapshot().recovery, null);
   assert.equal(f.original.getSnapshot().blocks.length, 0);
 });
-test('recorder and HTTP failures release leases and report one safe visible error', async t => {
+test('recorder and transcription failures release leases and report one safe visible error', async t => {
   for (const failure of ['recorder', 'http']) {
     const f = fixture(); t.after(() => f.service.dispose());
     await f.service.start();
@@ -195,11 +199,11 @@ test('recorder and HTTP failures release leases and report one safe visible erro
 test('configuration readiness gates capture, retries explicitly, and preserves click-time draft identity', async t => {
   let configured = false;
   const f = fixture({ ready: async () => {
-    if (!configured) throw new SpeechError('CONFIG_UNAVAILABLE', '请创建 azure-speech.json。');
+    if (!configured) throw new SpeechError('CONFIG_UNAVAILABLE', '请创建 azure-openai.json。');
   } });
   t.after(() => f.service.dispose());
   await f.service.start();
-  assert.match(f.service.getSnapshot().error!, /azure-speech\.json/);
+  assert.match(f.service.getSnapshot().error!, /azure-openai\.json/);
   assert.equal(f.values().captures, 0);
   assert.equal(f.values().requests, 0);
   assert.equal(f.values().preparationsCancelled, 1);

@@ -37,8 +37,31 @@ trimming, instead of the first 200; shorter replies stay whole. Frontend selecti
 and backend validation use the same limit. This is module policy, not an Azure
 maximum, and does not add history reads or change message eligibility.
 
-Azure LLM Speech, file-only configuration, 120-second automatic stop/transcription
-and no-auto-send behavior are unchanged. Audio still goes through the module
-backend; this release does not change to browser-direct Azure access.
+## Breaking provider/configuration migration
+
+Following the user's explicit provider decision, the same unreleased 0.1.1 now
+uses Azure OpenAI **gpt-transcribe over browser-direct WebRTC**, not Azure LLM
+Speech file transcription. Deploy gpt-transcribe and create `azure-openai.json`
+with exactly `endpoint`, `key`, and `deployment`. The endpoint is the Azure
+OpenAI resource origin. The old `azure-speech.json` is not read or migrated.
+
+The only module route is `POST /session`. It exchanges the server-held key for
+a short-lived credential and returns it to the browser; no Entra business
+authentication is required. Audio/transcripts no longer pass through Cockpit.
+The old `/config-ready` and audio-upload `/transcribe` routes are removed.
+Context is sent when requesting credentials, and audio is sent during recording:
+cancel stops further transmission but cannot retract data or provider charges.
+
+The same 1,000-code-point excerpt accompanies pure-transcription session
+configuration. Its short reference label keeps the complete prompt at 1,022
+code points, within Azure's 1,024-code-point limit. Recording still ends after
+120 seconds and commits once; final
+text is inserted only after stop, never auto-sent. It is not a duplex assistant
+or live-caption mode. A new connection per operation plus committed-item
+correlation protects against stale completions. WAV buffering, the fixed 16 kHz
+requirement and the packaged PCM worklet are removed.
+
+This provider change requires no new host API or SDK pin, and does not change
+the already-selected unreleased versions (host 0.2.5 / Speech 0.1.1).
 Synthetic checks do not establish real microphone/browser-device support, Azure
 availability, credentials or recognition quality.

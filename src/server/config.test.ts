@@ -5,27 +5,29 @@ import { randomUUID } from 'node:crypto';
 import { join, resolve } from 'node:path';
 import { parseConfig, readConfig } from './config.ts';
 
-const config = { endpoint: 'https://synthetic-resource.cognitiveservices.azure.com/', key: 'synthetic-test-key-not-valid' };
+const config = { endpoint: 'https://synthetic-resource.openai.azure.com/', key: 'synthetic-test-key-not-valid', deployment: 'gpt-transcribe' };
 test('config accepts only exact fields and a public Azure resource origin', () => {
   assert.deepEqual(parseConfig(config), { ...config, endpoint: config.endpoint.slice(0, -1) });
-  for (const endpoint of ['http://x.cognitiveservices.azure.com', 'https://x.cognitiveservices.azure.com:443',
-    'https://x.cognitiveservices.azure.com/path', 'https://x.cognitiveservices.azure.com?secret=1',
-    'https://user@x.cognitiveservices.azure.com', 'https://x.cognitiveservices.azure.com.evil.invalid',
+  for (const endpoint of ['http://x.openai.azure.com', 'https://x.openai.azure.com:443',
+    'https://x.openai.azure.com/path', 'https://x.openai.azure.com?secret=1',
+    'https://user@x.openai.azure.com', 'https://x.openai.azure.com.evil.invalid',
     'https://localhost', 'https://127.0.0.1', 'https://x.api.cognitive.microsoft.com',
-    'https://-x.cognitiveservices.azure.com', 'https://x-.cognitiveservices.azure.com']) {
+    'https://x.cognitiveservices.azure.com', 'https://-x.openai.azure.com', 'https://x-.openai.azure.com']) {
     assert.throws(() => parseConfig({ ...config, endpoint }), { code: 'CONFIG_ENDPOINT' });
   }
   for (const invalid of [{}, null, [], { ...config, other: true }, { ...config, key: '' },
-    { ...config, key: 'a\nb' }, { ...config, key: 'secret ' }, { endpoint: 1, key: 'test' }]) {
+    { ...config, key: 'a\nb' }, { ...config, key: 'secret ' }, { endpoint: 1, key: 'test' },
+    { ...config, deployment: '' }, { ...config, deployment: '../model' }, { ...config, deployment: 'a'.repeat(65) }]) {
     assert.throws(() => parseConfig(invalid));
   }
 });
 test('config is reread, bounded, non-symlink and never exposes its bytes on errors', async () => {
   const root = resolve('.test-work', randomUUID());
   await mkdir(root, { recursive: true });
-  const path = join(root, 'azure-speech.json');
+  const path = join(root, 'azure-openai.json');
   try {
-    await assert.rejects(readConfig(root), /azure-speech.json.*endpoint.*key/);
+    await writeFile(join(root, 'azure-speech.json'), JSON.stringify(config));
+    await assert.rejects(readConfig(root), /azure-openai.json.*endpoint.*key/);
     await writeFile(path, JSON.stringify(config), { mode: 0o600 });
     assert.equal((await readConfig(root)).key, config.key);
     await writeFile(path, JSON.stringify({ ...config, key: 'updated-synthetic-test-key' }));
