@@ -157,6 +157,21 @@ test('stop flushes tail samples before its single commit; intentional stop does 
   f.worklet.port.postMessage = () => queueMicrotask(() => {
     f.pcm(2); f.worklet.port.onmessage?.({ data: { type: 'ended', limited: false } });
   });
+  test('late audio-context cleanup failure cannot abort a newer replay attempt', async () => {
+    const f = fixture();
+    let rejectClose!: (error: Error) => void;
+    f.context.close = () => new Promise((_resolve, reject) => { rejectClose = reject; });
+    const recording = await f.start(); f.pcm(); await pump();
+    f.sockets[0]!.onclose?.();
+    await assert.rejects(recording.stop(), { code: 'CONNECTION_CLOSED' });
+    const replay = recording.retry(); await pump();
+    rejectClose(new Error('Synthetic late cleanup rejection')); await turn();
+    assert.deepEqual(f.errors, []);
+    const socket = f.sockets[1]!;
+    assert.equal(socket.closed, 0);
+    socket.commit(); socket.final();
+    assert.equal(await replay, 'recognized'); recording.cancel();
+  });
   const stop = recording.stop();
   assert.equal(stop, recording.stop());
   await pump();

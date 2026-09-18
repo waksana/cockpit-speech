@@ -26,9 +26,15 @@ export function prepareRecording(
   const lifetime = new AbortController();
   const combined = AbortSignal.any([signal, lifetime.signal]);
   let attempt: AbortController | undefined;
-  const audio = new AudioCapture(combined, error => { attempt?.abort(error); fail(error); }, limit, env);
+  let captureActive = true;
+  const audio = new AudioCapture(combined, error => {
+    // A late capture cleanup callback must not fail a newer replay connection.
+    if (!captureActive || combined.aborted) return;
+    captureActive = false;
+    attempt?.abort(error); fail(error);
+  }, limit, env);
   let started = false;
-  const cancel = () => { lifetime.abort(abortError()); attempt?.abort(abortError()); audio.cancel(); };
+  const cancel = () => { captureActive = false; lifetime.abort(abortError()); attempt?.abort(abortError()); audio.cancel(); };
   return {
     cancel,
     async start(session, context) {
@@ -61,12 +67,16 @@ export function prepareRecording(
         stop(committed) {
           if (pending) return pending;
           onCommit = committed;
-          pending = (async () => { await audio.stop(); return unwrap(); })();
+          pending = (async () => {
+            try { await audio.stop(); } finally { captureActive = false; }
+            return unwrap();
+          })();
           return pending;
         },
         retry(committed) {
           combined.throwIfAborted();
           if (!audio.sealed || audio.bytes < 4800) throw new SpeechError('AUDIO_TOO_SHORT', '录音不足 0.1 秒，请重新录音。');
+          captureActive = false;
           onCommit = committed;
           result = send(true);
           pending = unwrap();
