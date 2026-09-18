@@ -43,7 +43,9 @@ reuse another project's dependencies.
 - Both sample-count and wall-clock limits preserve/finalize audio and trigger
   transcription once, including a racing manual stop and the final partial buffer.
 - Ready vs stale/unavailable/partial context; roots, provenance, subtypes,
-  incompletion, session boundaries and code-point clipping.
+  incompletion, session boundaries and trailing 1,000-code-point clipping.
+  Frontend selection and backend validation share the same limit; 1,000 ASCII
+  or supplementary characters pass intact, while 1,001 are rejected.
 - Prompt/ask/plan draft capture, exact selection and context timing; manual edit
   conflict, same-lifetime explicit recovery, reused request IDs, pending/
   unconfirmed/peer blocks, double stop, late HTTP completion, cancellation and

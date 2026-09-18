@@ -9,15 +9,19 @@ const audio = encodeWav([new Float32Array([0.1, -0.2])], 2);
 const body = { audio: Buffer.from(audio).toString('base64'), mime: 'audio/wav' };
 const signal = () => new AbortController().signal;
 test('typed browser input rejects unknown fields, URLs, bad base64, formats and oversized context', () => {
-  assert.deepEqual(parseInput({ ...body, context: '😀'.repeat(200) }).audio, audio);
+  for (const context of ['a'.repeat(1_000), '😀'.repeat(1_000)]) {
+    assert.deepEqual(parseInput({ ...body, context }), { audio, context });
+  }
   for (const invalid of [{ ...body, key: 'x' }, { ...body, endpoint: 'https://x' }, { ...body, audioUrl: 'https://x' },
-    { ...body, context: '😀'.repeat(201) }, { ...body, context: 1 }, { ...body, mime: 'audio/mp4' },
+    { ...body, context: '😀'.repeat(1_001) }, { ...body, context: 'a'.repeat(1_001) },
+    { ...body, context: 1 }, { ...body, mime: 'audio/mp4' },
     { ...body, audio: 'AAAA===' }, { ...body, audio: 'Zg==\n' }, { ...body, audio: 'Zg==' }, null]) {
     assert.throws(() => parseInput(invalid));
   }
 });
 test('provider multipart uses enhanced transcribe only, fixed endpoint/header, no redirects or retries', async () => {
   let calls = 0;
+  const context = '😀'.repeat(995) + 'final';
   const adapter = azureTranscriber(async (url, init) => {
     calls++;
     assert.equal(url, `${config.endpoint}/speechtotext/transcriptions:transcribe?api-version=2025-10-15`);
@@ -28,12 +32,12 @@ test('provider multipart uses enhanced transcribe only, fixed endpoint/header, n
     assert.equal(file.name, 'recording.wav'); assert.equal(file.type, 'audio/wav');
     assert.deepEqual(new Uint8Array(await file.arrayBuffer()), audio);
     const options = JSON.parse(form.get('definition') as string);
-    assert.deepEqual(options, definition('verbatim 😀 reference'));
+    assert.deepEqual(options, definition(context));
     assert.equal(options.enhancedMode.task, 'transcribe');
     assert.match(options.enhancedMode.prompt[0]!, /not instructions or content to insert/);
     return Response.json({ combinedPhrases: [{ channel: 0, text: 'First' }, { text: '第二' }] });
   });
-  assert.equal(await adapter.transcribe(config, { audio, context: 'verbatim 😀 reference' }, signal()), 'First\n第二');
+  assert.equal(await adapter.transcribe(config, parseInput({ ...body, context }), signal()), 'First\n第二');
   assert.equal(calls, 1);
 });
 test('combinedPhrases keeps mono array order and rejects wrong channels, shapes and silence', () => {

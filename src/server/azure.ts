@@ -8,7 +8,7 @@ export interface Transcriber {
 }
 
 export function parseInput(value: unknown): TranscriptionInput {
-  const invalid = () => new SpeechError('REQUEST_INVALID', '请求只允许 audio（base64 单声道 PCM WAV）、mime（audio/wav）及可选 context（最多 200 个字符）。');
+  const invalid = () => new SpeechError('REQUEST_INVALID', `请求只允许 audio（base64 单声道 PCM WAV）、mime（audio/wav）及可选 context（最多 ${MAX_CONTEXT_POINTS} 个 Unicode 字符）。`);
   if (!isRecord(value) || Object.keys(value).some(key => !['audio', 'mime', 'context'].includes(key))
     || value.mime !== 'audio/wav' || typeof value.audio !== 'string' || !value.audio
     || value.audio.length > Math.ceil(MAX_AUDIO_BYTES / 3) * 4

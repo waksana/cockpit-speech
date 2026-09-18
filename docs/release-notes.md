@@ -31,7 +31,14 @@ exact draft lifetime and revision. Explicit cancellation returns focus without
 redirecting late results. Draft leases, manual-edit conflicts, reused request IDs
 and recovery remain bound to the captured lifetime.
 
-Azure LLM Speech, file-only configuration, 120-second automatic stop/transcription,
-module-owned context selection and no-auto-send behavior are unchanged.
+Context remains the newest eligible completed root assistant reply captured at
+record click. The excerpt now takes its **last 1,000 Unicode code points** after
+trimming, instead of the first 200; shorter replies stay whole. Frontend selection
+and backend validation use the same limit. This is module policy, not an Azure
+maximum, and does not add history reads or change message eligibility.
+
+Azure LLM Speech, file-only configuration, 120-second automatic stop/transcription
+and no-auto-send behavior are unchanged. Audio still goes through the module
+backend; this release does not change to browser-direct Azure access.
 Synthetic checks do not establish real microphone/browser-device support, Azure
 availability, credentials or recognition quality.

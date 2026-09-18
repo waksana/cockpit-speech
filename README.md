@@ -68,8 +68,9 @@ User/tool/system messages, child messages, subagent and skill output, unknown
 origins and incomplete messages are excluded. This is selected at the record
 click, not refreshed while recording or transcribing.
 
-**Module policy:** at most **200 Unicode code points**, taking the beginning of
-the eligible message. This is not a host limit or a summary. A disconnected,
+**Module policy:** at most **1,000 Unicode code points**, taking the end of
+the eligible message after trimming surrounding whitespace. Shorter replies are
+kept whole. This is not a host/Azure limit or a summary. A disconnected,
 stale, unavailable or different-session window contributes no context; recording
 does not fetch additional history. Partial windows may contribute eligible
 loaded messages. The module never scrapes DOM text or accesses private stores.
