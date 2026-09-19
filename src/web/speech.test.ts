@@ -4,6 +4,7 @@ import type { ChatWindowSnapshot, DraftPurpose, HostSnapshot, ModuleDraft, Modul
 import { SpeechError } from '../shared/limits.ts';
 import { SpeechService } from './speech.ts';
 import type { Recording } from './recorder.ts';
+import { HOLD_DELAY, HoldGesture } from './hold.ts';
 
 function deferred<T>() {
   let resolve!: (value: T) => void;
@@ -191,6 +192,39 @@ test('cancelled transcription completion never writes to the original or replace
   assert.equal(f.original.getSnapshot().text, 'hello world');
   assert.equal(f.service.getSnapshot().recovery, null);
   assert.equal(f.original.getSnapshot().blocks.length, 0);
+});
+test('hold release or exit during permission cancels the lease and every late recording', async t => {
+  for (const release of [true, false]) {
+    await t.test(release ? 'release before ready' : 'exit before ready', async t => {
+      t.mock.timers.enable({ apis: ['setTimeout'] });
+      const f = fixture({ permission: true });
+      t.after(() => f.service.dispose());
+      f.original.editText('');
+      const gesture = new HoldGesture({
+        allowed: () => f.service.canStart(), bounds: () => ({ left: 0, top: 0, right: 100, bottom: 40 }),
+        phase: () => f.service.getSnapshot().phase,
+        start: () => { void f.service.start(); }, stop: () => { void f.service.stop(); },
+        cancel: () => f.service.cancel(), focus: () => assert.fail('must not focus on long hold'),
+      });
+      const point = { pointerId: 1, clientX: 20, clientY: 20, button: 0, isPrimary: true };
+      gesture.down(point, { setPointerCapture() {}, hasPointerCapture: () => false, releasePointerCapture() {} });
+      t.mock.timers.tick(HOLD_DELAY);
+      assert.equal(f.service.getSnapshot().phase, 'permission');
+      if (release) gesture.up(point);
+      else gesture.move({ ...point, clientX: 100 });
+      assert.equal(f.original.getSnapshot().blocks.length, 0);
+      assert.equal(f.values().capturedSignal?.aborted, true);
+      f.permission.resolve(f.recording);
+      await new Promise<void>(resolve => setImmediate(resolve));
+      gesture.move(point); gesture.up(point);
+      assert.equal(f.values().cancelled, 1);
+      assert.equal(f.values().stops, 0);
+      assert.equal(f.values().requests, 0);
+      assert.equal(f.service.getSnapshot().phase, 'idle');
+      assert.equal(f.service.canRetry(), false);
+      assert.equal(f.original.getSnapshot().text, '');
+    });
+  }
 });
 test('failures release leases, retain replay data and expose only a safe retry-button error', async t => {
   for (const failure of ['recorder', 'http']) {

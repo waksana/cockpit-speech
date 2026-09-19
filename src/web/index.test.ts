@@ -30,13 +30,19 @@ test('frontend requires additive capabilities rather than assuming them from API
   }
 });
 
-test('input middleware preserves native textarea props and keeps decision microphones separate from feedback', async () => {
+test('input middleware preserves native textarea props and keeps decision microphones separate from feedback', async t => {
   type Element = { type: unknown; props: Record<string, unknown>; children: unknown[] };
   const disposers: (() => void)[] = [];
   const effects: (() => void)[] = [];
   let service!: SpeechService;
   let phase: SpeechSnapshot['phase'] = 'idle';
   let error: string | null = null;
+  for (const key of ['window', 'document']) {
+    const original = Object.getOwnPropertyDescriptor(globalThis, key);
+    Object.defineProperty(globalThis, key, { configurable: true, value: new EventTarget() });
+    t.after(() => original ? Object.defineProperty(globalThis, key, original) : Reflect.deleteProperty(globalThis, key));
+  }
+  const cleanupEffects = () => { for (const cleanup of effects.splice(0).reverse()) cleanup(); };
   const host = { getSnapshot: () => ({ sessionId: 's', visible: true, connected: true }), subscribe: () => () => {} };
   const context = {
     apiVersion: 2, uiVersion: 1, chatWindowVersion: 1, composerInputVersion: 1,
@@ -44,7 +50,8 @@ test('input middleware preserves native textarea props and keeps decision microp
     react: {
       Fragment: 'fragment',
       createElement: (type: unknown, props: Record<string, unknown> | null, ...children: unknown[]): Element => ({ type, props: props ?? {}, children }),
-      useRef: () => ({ current: null }),
+      useRef: (value: unknown) => ({ current: value }),
+      useState: (value: unknown) => [value, () => {}],
       useMemo: (factory: () => unknown) => factory(),
       useCallback: (fn: unknown) => fn,
       useSyncExternalStore: (_subscribe: unknown, snapshot: () => unknown) =>
@@ -82,12 +89,18 @@ test('input middleware preserves native textarea props and keeps decision microp
       const sendBlocked = operation === 'ask' || operation === 'elicitation';
       const onPaste = () => {};
       const onKeyDown = () => {};
+      let focuses = 0;
+      let blurs = 0;
       const tree = Wrapped({
         draft, operation, disabled: false, sendBlocked, value: 'controlled',
         onPaste, onKeyDown, onSubmit: nativeSubmit, onChange: nativeTextChange,
+        onFocus: () => { focuses++; }, onBlur: () => { blurs++; },
         'aria-label': 'Native editor', className: 'native-editor', rows: 1,
       });
-      const base = tree.children[0] as Element;
+      const inputRegion = tree.children[0] as Element;
+      assert.equal(inputRegion.props.className, 'cockpit-speech-input');
+      const base = inputRegion.children[0] as Element;
+      assert.equal(inputRegion.children[1], null, 'content keeps native editing without a gesture layer');
       assert.equal(base.type, Base);
       assert.equal(base.props.onSubmit, nativeSubmit);
       assert.equal(base.props.onChange, nativeTextChange);
@@ -97,12 +110,23 @@ test('input middleware preserves native textarea props and keeps decision microp
       assert.equal(base.props['aria-label'], 'Native editor');
       assert.equal(base.props.className, 'native-editor');
       assert.equal(base.props.rows, 1);
-      assert.equal(tree.children.length, 2, 'only actual Base and microphone, no panel or placeholder inside row');
+      (base.props.onFocus as (event: object) => void)({});
+      (base.props.onBlur as (event: object) => void)({});
+      assert.equal(focuses, 1); assert.equal(blurs, 1);
+      assert.equal(tree.children.length, 2, 'only input region and microphone, no recovery panel inside row');
       const mic = tree.children[1] as Element;
       assert.equal(mic.type, 'button'); assert.equal(mic.props.type, 'button');
       assert.equal(mic.props['aria-label'], '开始语音输入');
       assert.equal(mic.props.disabled, sendBlocked);
-      effects.pop()!();
+      cleanupEffects();
+      const empty = Wrapped({ draft, operation, disabled: false, sendBlocked, value: '', onSubmit: nativeSubmit, onChange: nativeTextChange });
+      const layer = (empty.children[0] as Element).children[1] as Element | null;
+      assert.equal(!!layer, !sendBlocked, 'only writable empty inputs offer a gesture');
+      if (layer) {
+        assert.equal(layer.props['aria-hidden'], true);
+        assert.equal(layer.props.tabIndex, undefined, 'keyboard focus stays on the real textarea');
+      }
+      cleanupEffects();
       for (const current of ['permission', 'recording', 'stopping', 'transcribing', 'retry'] as const) {
         phase = current;
         const rendered = Wrapped({ draft, operation, disabled: false, sendBlocked: false, value: '', onSubmit: nativeSubmit, onChange: nativeTextChange });
@@ -119,7 +143,7 @@ test('input middleware preserves native textarea props and keeps decision microp
           (button.props.onClick as () => void)();
           assert.equal(service.getSnapshot().phase, 'idle', 'busy clicks neither cancel nor start');
         }
-        effects.pop()!();
+        cleanupEffects();
       }
       phase = 'idle';
     }
@@ -139,5 +163,5 @@ test('input middleware preserves native textarea props and keeps decision microp
     }
     phase = 'idle'; error = 'Synthetic device disconnected';
     assert.equal(Panel(), null, 'errors never create a notification bar');
-  } finally { for (const effect of effects) effect(); for (const dispose of disposers) dispose(); }
+  } finally { cleanupEffects(); for (const dispose of disposers) dispose(); }
 });

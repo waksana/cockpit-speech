@@ -1,4 +1,27 @@
-# Cockpit Speech 0.2.0
+# Cockpit Speech 0.3.0
+
+Adds empty-input hold-to-talk for waksana/cockpit-speech#5. No deployment,
+installation, service restart, tag or release is performed by the source change.
+
+- Empty and unfocused writable inputs show a non-editing gesture layer. Tap to
+  focus the original textarea; hold 300 ms to start local microphone acquisition.
+- Release inside after recording starts to transcribe into the original draft,
+  without sending. Release during startup cancels; no delayed recording starts.
+- Moving outside the actual input bounds irreversibly cancels that press and
+  destroys its audio, even under pointer capture or during permission acquisition.
+  Capture loss, system/page interruption and input replacement also cancel.
+- Focused/nonempty inputs preserve editing, selection and paste. Keyboard users
+  still focus the textarea directly, and the existing microphone is unchanged.
+  Existing draft leases, retry-after-transcription failure and conflict recovery
+  remain in effect. No backend, host API or SDK pin change is needed.
+
+iOS Safari/PWA real-device behavior is not verified. The overlay avoids competing
+with native textarea long-press selection, but desktop synthetic coverage does
+not prove mobile microphone activation, permission UI or OS gesture behavior.
+
+---
+
+# Historical: Cockpit Speech 0.2.0
 
 Unreleased follow-up to waksana/cockpit#51. No tag, release, installation or
 service restart is performed by this source change.

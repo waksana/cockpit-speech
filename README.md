@@ -30,6 +30,34 @@ never sent automatically. If the draft changed, its text is not overwritten:
 the separate result recovery field offers copy, explicit insertion at the
 current caret, or discard. Only this conflict recovery can add a panel.
 
+## Hold to talk on an empty input
+
+An empty, unfocused, writable input displays a non-editing gesture layer:
+**轻点输入，按住说话**. A short tap focuses the real textarea for typing or
+native selection/paste. Holding for 300 ms starts microphone acquisition; wait
+for the existing microphone button to show its stop square before speaking.
+Release inside the input to stop and transcribe into the original draft, never
+to send a message. Releasing before the microphone is ready cancels instead.
+
+Moving outside the input bounds cancels immediately, including while waiting for
+the hold threshold or microphone permission. Moving back never resumes that
+press, and releasing afterward cannot submit. Cancellation discards the audio,
+not retains it for retry. Pointer capture loss/cancellation, window blur, page
+hiding, scrolling/resizing and input replacement also interrupt the gesture.
+The bounds exclude File, microphone and send buttons.
+
+Focused or nonempty inputs keep native editing. To paste into an empty unfocused
+input, tap first, then use native long-press paste. Keyboard Tab still focuses
+the real textarea; the gesture layer adds no tab stop. The independent microphone
+button remains the accessible alternative and retains its existing behavior.
+No host API, SDK pin or backend protocol change is required.
+
+The layer suppresses selection and touch callouts rather than intercepting a
+long press on an editable textarea. This is not a claim of iOS Safari/PWA
+hardware compatibility: microphone permission, transient activation and OS
+gesture behavior still require real-device verification. If microphone startup
+cannot complete while held, release safely and use the microphone button.
+
 ## File-only configuration
 
 Create **`<dataRoot>/azure-openai.json`**, outside the immutable module install.
@@ -144,8 +172,8 @@ pnpm typecheck
 pnpm test
 pnpm build
 # After committing clean source; use a new output directory.
-node scripts/package.mjs module-output-0.2.0
-node scripts/verify-package.mjs module-output-0.2.0/cockpit-speech-0.2.0.tgz
+node scripts/package.mjs module-output-0.3.0
+node scripts/verify-package.mjs module-output-0.3.0/cockpit-speech-0.3.0.tgz
 ```
 
 Archives contain runtime code, worklet assets, licenses and exact source/SDK

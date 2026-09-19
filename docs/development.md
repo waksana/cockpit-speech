@@ -64,6 +64,18 @@ There is no timer, phase text, success/error panel or global error notification.
 Only draft-conflict text recovery uses the existing `composer` wrapper after the
 whole row; it cannot redirect insertion to another draft.
 
+`hold.ts` owns a single captured pointer and a 300 ms timer. The actual textarea
+stays mounted inside a module-owned flex region. Only an empty, unfocused,
+writable input gets the non-editing overlay; focus/blur chain the native handlers.
+Tab goes straight to the textarea. The overlay suppresses native touch selection,
+not the textarea's editing behavior. Bounds come from the public editor ref,
+not private DOM queries. Captured/coalesced coordinates are checked on move and
+release: once outside, ownership and timer are cleared before capture release,
+then the existing speech cancellation destroys the recording. Release while
+starting cancels; only release during recording stops/transcribes. Unmount,
+draft/host invalidation, visibility loss, window blur, resize and scroll cancel.
+The independent microphone button and post-stop retry/recovery paths are unchanged.
+
 ## Existing validation tools
 
 `pnpm test` uses Node's built-in runner and TypeScript stripping. Tests use
@@ -80,6 +92,8 @@ never production configuration or user recordings. They cover:
   stale callbacks, fresh retry cursors, cleanup and actual service lease release.
 - Single-button states, no notification bars, native props/ref/IME preservation,
   exact draft/revision conflicts, retained recovery and no automatic submission.
+- Tap/hold timing, all coordinate boundaries despite capture, irreversible exit,
+  startup release, late permission grants, capture loss and interruption cleanup.
 - Source/SDK identity, package closure and reproducibility.
 
 Run `pnpm typecheck`, `pnpm test`, then `pnpm build`. Packaging requires a fresh
