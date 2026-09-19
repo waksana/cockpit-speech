@@ -35,10 +35,16 @@ session/ask/plan APIs, schedules, host audio proxies or process
 control. Context text is untrusted reference vocabulary, never executable
 instructions to this module.
 
-At most 120 seconds of PCM audio is retained in browser memory (5.76 MB raw, plus
-temporary encoding overhead). Failure preserves it for explicit replay into a
-new connection, never a new draft. Success, target invalidation, navigation,
-visibility loss, host disconnect or module unload clears the recording.
+Each draft can retain at most 120 seconds of PCM audio in browser memory (5.76 MB
+raw, plus temporary encoding overhead). There is one active microphone, but no
+limit on independently retained draft tasks or concurrent connections; unresolved
+tasks can grow memory use. Failure preserves audio for explicit replay into a new
+connection, never a new draft. Navigation, visibility loss and host disconnect
+end capture without clearing the recording. Reliable host-guarded insertion,
+explicit discard, authoritative permanent draft retirement, a confirmed
+`AUDIO_TOO_SHORT` failure, or module/page teardown clears it. Conflict recovery
+retains audio as well as recognized text.
+Background execution can pause or fail when the browser freezes a page.
 There is no IndexedDB/localStorage, file upload, recording log or audio disk cache.
 Physical microphone permission and a cached Azure credential do not bypass the
 host's free-text gates or the module's exact-draft ownership checks.

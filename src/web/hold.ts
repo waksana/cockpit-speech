@@ -14,6 +14,7 @@ interface HoldOptions {
   start(): void;
   stop(): void;
   cancel(): void;
+  interrupt(): void;
   focus(): void;
 }
 interface Press {
@@ -77,7 +78,14 @@ export class HoldGesture {
     this.pendingTap = false;
     if (tap && this.options.allowed()) this.options.focus();
   }
-  lost(id: number): void { if (this.press?.id === id) this.cancel(); }
+  lost(id: number): void { if (this.press?.id === id) this.interrupt(); }
+  interrupt = (): void => {
+    this.pendingTap = false;
+    const press = this.press;
+    if (!press) return;
+    this.clear(press);
+    if (press.started) this.options.interrupt();
+  };
   cancel = (): void => {
     this.pendingTap = false;
     const press = this.press;

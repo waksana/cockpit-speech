@@ -22,6 +22,7 @@ function fixture(t: TestContext) {
     start: () => { calls.push('start'); phase = 'permission'; },
     stop: () => { calls.push('stop'); phase = 'transcribing'; },
     cancel: () => { calls.push('cancel'); phase = 'idle'; },
+    interrupt: () => { calls.push('interrupt'); phase = 'transcribing'; },
     focus: () => calls.push('focus'),
   });
   t.after(gesture.cancel);
@@ -119,7 +120,7 @@ test('release during permission aborts rather than scheduling a later stop', t =
   f.gesture.up(point);
   assert.deepEqual(f.calls, ['start', 'cancel']);
 });
-test('capture loss, system cancellation and disposal cancel active holds and pending timers', async t => {
+test('capture loss and navigation interrupt active holds without explicit discard', async t => {
   for (const started of [false, true]) {
     for (const reason of ['capture', 'system', 'dispose']) {
       await t.test(`${reason} started=${started}`, t => {
@@ -127,9 +128,9 @@ test('capture loss, system cancellation and disposal cancel active holds and pen
         f.gesture.down(point, f.surface);
         if (started) t.mock.timers.tick(HOLD_DELAY);
         if (reason === 'capture') f.gesture.lost(point.pointerId);
-        else f.gesture.cancel();
+        else f.gesture.interrupt();
         f.gesture.up(point); t.mock.timers.tick(1000);
-        assert.deepEqual(f.calls, started ? ['start', 'cancel'] : []);
+        assert.deepEqual(f.calls, started ? ['start', 'interrupt'] : []);
       });
     }
   }
