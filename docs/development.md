@@ -170,6 +170,20 @@ Before the hold threshold, no recording status row or live announcement is
 mounted and no audio starts. Preparation feedback follows the actual `permission`
 phase. Short-tap focus still uses the completed click.
 
+`keyboard.ts` provides one activation-scoped listener set and physical F8 latch
+across composer registration/replacement. It checks the public editor ref,
+standard DOM visibility/focus and dialog semantics, plus live host/draft gates;
+it never queries host-private selectors. An empty textarea need not be focused.
+Ambiguous visible composers fail closed. Keyboard starts use the existing hold
+mode with completion autofocus disabled, so an interrupted background result
+cannot steal focus from another UI. Only ready, unmodified keyup calls the same
+`releaseHold`; it clears key ownership first. Pre-release interruption, Escape,
+composition, pointer activity and lost-keyup recovery cannot capture consent.
+One MutationObserver handles UI visibility/dialog takeover without a timer or
+poll loop. Listeners persist through a composer gap to consume late release,
+and the module abort signal removes them. Pointer and button behavior remains
+separate while sharing the service's single capture owner.
+
 Hold starts pass `waitForStop` to the recording preparation. At the render or wall
 limit capture stops, but the transport queue's sealed view stays false until the
 release or navigation interruption calls stop. Thus a capped buffer does not initiate the final
@@ -201,6 +215,9 @@ never production configuration or user recordings. They cover:
   and exactly-once original-draft submission after active hold release.
 - Tap/hold timing, upward swipe despite capture, irreversible cancellation,
   startup release, late permission grants, capture loss and interruption cleanup.
+- F8 startup/readiness/release, modifiers/repeat/IME, empty input without focus,
+  other-control/modal/visibility exclusion, missing/late keyup, composer rebinding,
+  teardown and button/pointer contention; original prompt/ask/plan ACK and guards.
 - Source/SDK identity, package closure and reproducibility.
 
 Run `pnpm typecheck`, `pnpm test`, then `pnpm build`. Packaging requires a fresh

@@ -2,6 +2,7 @@ import type { ActivateFrontend, ComposerInputProps } from '@cockpit/module-api';
 import type { Ref } from 'react';
 import { HoldGesture } from './hold.ts';
 import { icons } from './icons.ts';
+import { KeyboardHold } from './keyboard.ts';
 import { prepareRecording } from './recorder.ts';
 import { SpeechService } from './speech.ts';
 import { sessionClient } from './transport.ts';
@@ -32,6 +33,9 @@ export const activate: ActivateFrontend = context => {
     }),
     dispose: service => service.dispose(),
   }).get();
+  const keyboard = new KeyboardHold();
+  const unsubscribeKeyboard = speech.subscribe(keyboard.refresh);
+  context.signal.addEventListener('abort', () => { keyboard.dispose(); unsubscribeKeyboard(); }, { once: true });
   function Icon({ name, className = '' }: { name: keyof typeof icons; className?: string }) {
     return h('svg', { className: `ck-icon ${className}`, width: 24, height: 24, viewBox: '0 0 24 24', fill: 'none',
       stroke: 'currentColor', strokeWidth: 2, strokeLinecap: 'round', strokeLinejoin: 'round',
@@ -131,6 +135,24 @@ export const activate: ActivateFrontend = context => {
           focus: () => input.current?.focus(),
         }), [draft]);
         const holding = React.useSyncExternalStore(gesture.subscribe, gesture.getSnapshot);
+        React.useLayoutEffect(() => keyboard.register({
+          editor: () => input.current,
+          available: () => {
+            const host = context.state.host.getSnapshot();
+            return !latest.current.disabled && !latest.current.sendBlocked && host.visible && host.connected
+              && host.sessionId === draft.sessionId && !draft.getSnapshot().retired;
+          },
+          empty: () => latest.current.value === '' && draft.getSnapshot().text === '' && input.current?.value === '',
+          canStart: () => !gesture.getSnapshot() && speech.canStart(draft.id),
+          canContinue: () => speech.ownsDraft(draft.id)
+            || (latest.current.value === '' && draft.getSnapshot().text === '' && input.current?.value === ''),
+          phase: () => speech.getSnapshot(draft.id).phase,
+          start: () => { void speech.start('hold', draft.id, { focusOnCompletion: false }); },
+          release: () => { void speech.releaseHold(draft.id); },
+          interrupt: () => speech.interrupt(draft.id),
+          cancel: () => speech.cancel(draft.id),
+        }, document, window), [draft, gesture]);
+        React.useLayoutEffect(keyboard.refresh, [props.value, props.disabled, props.sendBlocked, snapshot, host]);
         React.useLayoutEffect(() => {
           const interrupt = () => { gesture.interrupt(); speech.interrupt(draft.id); };
           const visibility = () => { if (document.visibilityState !== 'visible') interrupt(); };
@@ -187,8 +209,11 @@ export const activate: ActivateFrontend = context => {
         const disabled = sendError || busy || (!active && (props.disabled || props.sendBlocked || !(retry ? speech.canRetry(draft.id) : speech.canStart(draft.id))));
         const button = h('button', {
           type: 'button', className: `ck-icon-button cockpit-speech-mic${retry ? ' cockpit-speech-retry' : ''}`, disabled,
-          'aria-label': label, title: state.error ?? label, 'aria-pressed': state.phase === 'recording', 'aria-busy': busy,
+          'aria-label': label, title: state.error ?? (state.phase === 'idle'
+            ? `${label}；空输入可按住 F8 说话，松开发送（网页需聚焦，Fn 由设备决定）` : label),
+          'aria-pressed': state.phase === 'recording', 'aria-busy': busy,
           onClick: () => {
+            keyboard.interrupt();
             gesture.interrupt();
             if (state.phase === 'recording') void speech.stop(draft.id);
             else if (retry) void speech.retry(draft.id);
@@ -219,7 +244,8 @@ export const activate: ActivateFrontend = context => {
               onContextMenu: event => event.preventDefault(),
               // Keep the touch target mounted through release; focus in the completed click gesture.
               onClick: event => { event.preventDefault(); gesture.click(); },
-            }, holding && active ? '' : '轻点输入，按住说话') : null,
+            }, holding && active ? '' : '轻点输入，按住说话',
+            holding && active ? null : h('span', { className: 'cockpit-speech-key-hint' }, '(F8)')) : null,
           ), button,
         );
       },

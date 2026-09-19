@@ -147,6 +147,7 @@ test('input middleware preserves native textarea props and keeps decision microp
         layer ? '' : 'Native placeholder', 'hide the native hint only while the transparent gesture layer supplies it');
       if (layer) {
         assert.equal(layer.children[0], '轻点输入，按住说话');
+        assert.equal((layer.children[1] as Element).children[0], '(F8)');
         assert.equal(layer.props['aria-hidden'], true);
         assert.equal(layer.props.tabIndex, undefined, 'keyboard focus stays on the real textarea');
         let nativeFocus = 0;

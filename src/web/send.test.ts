@@ -5,6 +5,8 @@ import { SpeechError } from '../shared/limits.ts';
 import type { Recording } from './recorder.ts';
 import { SpeechService } from './speech.ts';
 import { HOLD_DELAY, HoldGesture } from './hold.ts';
+import { KeyboardHold } from './keyboard.ts';
+import { keyboardDOM } from './keyboard.fixture.test.ts';
 
 function deferred<T>() {
   let resolve!: (value: T) => void;
@@ -391,6 +393,7 @@ test('real hold gesture release authorizes once; interruption clears ownership b
       stop: () => { void f.service.releaseHold(); }, interrupt: () => f.service.interrupt(),
       cancel: () => f.service.cancel(), focus() {},
     });
+
     const point = { pointerId: 1, button: 0, isPrimary: true, clientX: 10, clientY: 10 };
     gesture.down(point, { setPointerCapture() {}, hasPointerCapture: () => true, releasePointerCapture() { gesture.lost(1); } });
     t.mock.timers.tick(HOLD_DELAY); await turn();
@@ -399,5 +402,88 @@ test('real hold gesture release authorizes once; interruption clears ownership b
     f.takes[0]!.stop.resolve('one message'); await turn();
     assert.equal(f.requests.length, interrupted ? 0 : 1);
     f.original.reply.resolve({ status: 'acknowledged' }); await turn();
+  }
+});
+
+function keyboardFixture(t: TestContext, f: ReturnType<typeof fixture>, original = f.original) {
+  const dom = keyboardDOM();
+  const keyboard = new KeyboardHold();
+  const editor = dom.editor();
+  const unregister = keyboard.register({
+    editor: () => editor as unknown as HTMLTextAreaElement,
+    available: () => f.host.getSnapshot().visible && f.host.getSnapshot().connected
+      && f.host.getSnapshot().sessionId === original.draft.sessionId && !original.draft.getSnapshot().retired,
+    empty: () => original.draft.getSnapshot().text === '',
+    canStart: () => f.service.canStart(original.draft.id),
+    canContinue: () => original.draft.getSnapshot().text === '' || f.service.ownsDraft(original.draft.id),
+    phase: () => f.service.getSnapshot(original.draft.id).phase,
+    start: () => { void f.service.start('hold', original.draft.id, { focusOnCompletion: false }); },
+    release: () => { void f.service.releaseHold(original.draft.id); },
+    interrupt: () => f.service.interrupt(original.draft.id),
+    cancel: () => f.service.cancel(original.draft.id),
+  }, dom.document as unknown as Document, dom.window as unknown as Window);
+  const unsubscribe = f.service.subscribe(keyboard.refresh);
+  t.after(() => { unsubscribe(); keyboard.dispose(); });
+  return { ...dom, keyboard, unregister };
+}
+
+test('F8 sends one complete original prompt/ask/plan through captureSend and native ACK', async t => {
+  for (const purpose of [{ kind: 'prompt' }, { kind: 'ask', requestId: 'question' }, { kind: 'plan', requestId: 'plan' }] as const) {
+    const f = fixture(t);
+    const original = f.owner('keyboard-original', 'original-session', purpose);
+    f.select(original); original.attach('attachment');
+    const k = keyboardFixture(t, f, original);
+    k.key('keydown'); k.key('keydown', { repeat: true }); await turn();
+    f.takes[0]!.text('live words');
+    k.key('keyup'); k.key('keyup');
+    f.select(f.owner('other', 'other-session'));
+    k.unregister();
+    f.takes[0]!.stop.resolve('complete words'); await turn();
+    assert.deepEqual(f.requests, [{ id: original.draft.id, sessionId: 'original-session', purpose, text: 'complete words', attachment: 'attachment' }]);
+    assert.equal(original.captures(), 1);
+    original.reply.resolve({ status: 'acknowledged' }); await turn();
+    assert.equal(original.sendCalls(), 1);
+    assert.equal(f.takes[0]!.signal.aborted, true);
+  }
+});
+
+test('F8 pre-release switch/rebind/hidden/blur/escape/external edit cannot authorize a late release', async t => {
+  for (const reason of ['session', 'ask', 'rebind', 'hidden', 'blur', 'escape', 'external-text'] as const) {
+    const f = fixture(t);
+    const k = keyboardFixture(t, f);
+    k.key('keydown'); await turn();
+    if (reason === 'session') f.select(f.owner('other', 'other-session'));
+    if (reason === 'ask') f.select(f.owner('ask', 'original-session', { kind: 'ask', requestId: 'replacement' }));
+    if (reason === 'rebind') k.unregister();
+    if (reason === 'hidden') f.host.set({ ...f.host.getSnapshot(), visible: false });
+    if (reason === 'blur') k.window.dispatchEvent(new Event('blur'));
+    if (reason === 'escape') k.key('keydown', { key: 'Escape' });
+    if (reason === 'external-text') f.original.draft.editText('manual text');
+    k.key('keyup'); k.key('keyup');
+    f.takes[0]!.stop.resolve('recognized'); await turn();
+    assert.equal(f.requests.length, 0, reason);
+    assert.equal(f.original.captures(), 0, reason);
+    assert.equal(f.original.draft.getSnapshot().text,
+      reason === 'escape' ? '' : reason === 'external-text' ? 'manual text' : 'recognized', reason);
+    assert.equal(f.service.getSnapshot('original').focus, null, 'keyboard completion never steals focus after interruption');
+  }
+});
+
+test('F8 preserves silence, post-release schema/text guards and uncertain ACK without resend', async t => {
+  for (const outcome of ['silence', 'text', 'schema', 'unconfirmed'] as const) {
+    const f = fixture(t);
+    const k = keyboardFixture(t, f);
+    f.original.attach('initial');
+    k.key('keydown'); await turn(); k.key('keyup');
+    if (outcome === 'text') f.original.draft.editText('manual');
+    if (outcome === 'schema') { f.original.attach('changed'); f.original.attach('initial'); }
+    f.takes[0]!.stop.resolve(outcome === 'silence' ? '' : 'words'); await turn();
+    if (outcome === 'unconfirmed') {
+      f.original.reply.resolve({ status: 'unconfirmed', reason: 'native-unconfirmed' }); await turn();
+      k.key('keydown'); k.key('keyup'); await f.service.retry();
+      assert.equal(f.service.getSnapshot().sendOutcome, 'unconfirmed');
+    }
+    assert.equal(f.requests.length, outcome === 'unconfirmed' ? 1 : 0, outcome);
+    assert.equal(f.original.captures(), 1);
   }
 });

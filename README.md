@@ -101,7 +101,7 @@ Focused or nonempty inputs keep native editing. To paste into an empty unfocused
 input, tap first, then use native long-press paste. Keyboard Tab still focuses
 the real textarea; the gesture layer adds no tab stop. The independent microphone
 button remains the accessible alternative and retains its existing behavior.
-Speech 0.7.0 requires the paired host's `draftLifecycleVersion: 1` and
+Speech 0.8.0 requires the paired host's `draftLifecycleVersion: 1` and
 `draftSubmissionVersion: 1` capabilities
 as well as Cockpit's additive public UI classes. It uses the
 existing `composerEditor` middleware for the full-width status row and leaves
@@ -117,6 +117,48 @@ cannot complete while held, release safely and use the microphone button.
 In particular, iOS home-screen web apps may ask for microphone permission again.
 The browser owns permission persistence; the module cannot promise permanent
 authorization and deliberately releases the microphone after stop/cancel.
+
+## Desktop F8 push to talk
+
+With the Cockpit page focused and its current writable textarea **empty**, hold
+the fixed, unmodified **F8** key to start immediately; wait for the recording red
+dot, speak, then release F8 to transcribe and send once. **The textarea need not
+have focus.** Both its controlled value and original draft must be empty (spaces
+count as text). Existing attachments are allowed and keep the normal #16 send
+guards. Nonempty drafts keep native editing; use the microphone button for
+selection-based dictation without automatic sending.
+
+F8 does not take over another focused form/control/editor, an open dialog or
+popover, IME composition, or a hidden, inert, offscreen or unavailable composer.
+If more than one eligible composer is visible, it does not guess a target.
+It does not focus the textarea or move its caret, including when interrupted
+transcription later completes. Auto-repeat cannot start another recording.
+Escape explicitly discards the take; pressing another key, clicking/touching,
+focus moving to another control, window blur, hiding, resize, input replacement
+or unmount ends capture without authorizing a send. Starting microphone
+permission and releasing before actual readiness also cannot send; late media
+grants are closed.
+
+Only normal F8 keyup after readiness captures the existing original-draft send
+intent. Prompt, ask and plan use exactly the same native submission/ACK path as
+pointer hold, including original-target delivery after release and navigation,
+manual transcription retry, no send for empty recognition, external edit/schema
+guards, and no blind resend after an uncertain ACK. The microphone stop button
+still only finishes into the draft. Keyboard, pointer hold and button capture
+cannot acquire a second microphone or adopt each other's release.
+
+An interrupted press stays disarmed until F8 is released; a late keyup never
+sends it. If a keyup was lost, release F8 once before starting a new press.
+A new non-repeat keydown while the old press remains latched interrupts the old
+take rather than sending it. The existing two-minute capture cap still applies;
+missing keyup is never converted into automatic send.
+
+This is a **webpage shortcut, not an OS-global hotkey**. Browsers, extensions,
+developer tools or the OS may consume F8; the webpage cannot override that.
+Lenovo/other keyboards may require Fn+F8 or a firmware Fn-lock setting to emit
+F8; the module cannot control Fn mapping. There is no shortcut settings page.
+Synthetic keyboard/media coverage is not Windows/Lenovo hardware acceptance;
+the independent real-device work in #8/#9 remains open.
 
 ### Windows Chrome input troubleshooting
 
@@ -309,8 +351,8 @@ pnpm typecheck
 pnpm test
 pnpm build
 # After committing clean source; use a new output directory.
-node scripts/package.mjs module-output-0.7.0
-node scripts/verify-package.mjs module-output-0.7.0/cockpit-speech-0.7.0.tgz
+node scripts/package.mjs module-output-0.8.0
+node scripts/verify-package.mjs module-output-0.8.0/cockpit-speech-0.8.0.tgz
 ```
 
 Archives contain runtime code, worklet assets, licenses and exact source/SDK
