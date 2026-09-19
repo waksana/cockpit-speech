@@ -307,6 +307,28 @@ test('pending, unconfirmed, peer blocks and free-text gates prevent capture and 
   f.service.setTarget({ draft: f.original, disabled: false, sendBlocked: true, selection: () => ({ start: 0, end: 0 }) });
   assert.equal(f.service.canStart(), false);
 });
+test('held limit waits for release, keeps its lease and can still be cancelled without text or retry', async t => {
+  for (const action of ['release', 'exit']) {
+    const f = fixture(); t.after(() => f.service.dispose());
+    await f.service.start('hold');
+    f.limit(); f.limit();
+    assert.equal(f.service.getSnapshot().phase, 'recording');
+    assert.equal(f.service.getSnapshot().holdingAtLimit, true);
+    assert.equal(f.original.getSnapshot().blocks.length, 1);
+    assert.equal(f.values().stops, 0);
+    if (action === 'release') {
+      const stop = f.service.stop(); f.result.resolve('capped speech'); await stop;
+      assert.equal(f.original.getSnapshot().text, 'hello capped speech');
+    } else {
+      f.service.cancel();
+      assert.equal(f.values().requests, 0);
+      assert.equal(f.service.canRetry(), false);
+      assert.equal(f.original.getSnapshot().text, 'hello world');
+    }
+    assert.equal(f.service.getSnapshot().holdingAtLimit, false);
+    assert.equal(f.original.getSnapshot().blocks.length, 0);
+  }
+});
 test('double stop sends once; peer block appearing during transcription retains text', async t => {
   const f = fixture(); t.after(() => f.service.dispose());
   await f.service.start();

@@ -10,6 +10,9 @@ installation, service restart, tag or release is performed by the source change.
 - Moving outside the actual input bounds irreversibly cancels that press and
   destroys its audio, even under pointer capture or during permission acquisition.
   Capture loss, system/page interruption and input replacement also cancel.
+- At 120 seconds, stop capture but retain held audio without committing. Only
+  release inside transcribes it; exit still discards it. Independent microphone
+  recordings continue to stop and transcribe automatically at the limit.
 - Focused/nonempty inputs preserve editing, selection and paste. Keyboard users
   still focus the textarea directly, and the existing microphone is unchanged.
   Existing draft leases, retry-after-transcription failure and conflict recovery

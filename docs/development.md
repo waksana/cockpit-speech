@@ -76,6 +76,12 @@ starting cancels; only release during recording stops/transcribes. Unmount,
 draft/host invalidation, visibility loss, window blur, resize and scroll cancel.
 The independent microphone button and post-stop retry/recovery paths are unchanged.
 
+Hold starts pass `waitForStop` to the recording preparation. At the render or wall
+limit capture stops, but the transport queue's sealed view stays false until the
+explicit inside release calls stop. Thus a capped buffer cannot auto-commit while
+still held. Exit/cancellation clears it even after capture has stopped. The
+microphone button's limit policy is unchanged.
+
 ## Existing validation tools
 
 `pnpm test` uses Node's built-in runner and TypeScript stripping. Tests use
