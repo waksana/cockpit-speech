@@ -18,6 +18,10 @@ new microphone capture. There are no normal/error notification bars, automatic
 retries, audio persistence or automatic sends. Draft-conflict text recovery
 remains separate. Target cancellation clears the retained audio.
 
+The recovery panel leaves space above and below its border so it does not touch
+the editor row or the enclosing input card's bottom edge. Its existing bounded
+height and internal scrolling remain unchanged.
+
 ## Breaking module connection contract
 
 `POST /session` accepts only `{}`; context is sent directly by the browser, never
