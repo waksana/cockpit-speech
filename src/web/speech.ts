@@ -10,7 +10,6 @@ interface Identity { id: string; sessionId: string; purpose: string }
 export interface Recovery extends Identity { text: string }
 export interface SpeechSnapshot {
   phase: 'idle' | 'permission' | 'recording' | 'stopping' | 'transcribing' | 'retry';
-  pressing: boolean;
   elapsedSeconds: number;
   holdingAtLimit: boolean;
   level: number;
@@ -40,7 +39,7 @@ export interface SpeechOptions {
 const purposeKey = (purpose: DraftPurpose) => purpose.kind === 'prompt' ? 'prompt' : `${purpose.kind}:${purpose.requestId}`;
 const identity = (draft: ModuleDraft): Identity => ({ id: draft.id, sessionId: draft.sessionId, purpose: purposeKey(draft.purpose) });
 const matches = (a: Identity, b: Identity) => a.id === b.id && a.sessionId === b.sessionId && a.purpose === b.purpose;
-const idle: SpeechSnapshot = { phase: 'idle', pressing: false, elapsedSeconds: 0, holdingAtLimit: false,
+const idle: SpeechSnapshot = { phase: 'idle', elapsedSeconds: 0, holdingAtLimit: false,
   level: 0, error: null, notice: null, recovery: null, focus: null };
 
 export function insertText(text: string, addition: string, selection: Selection): string {
@@ -103,16 +102,10 @@ export class SpeechService {
     this.view = idle;
     const operation = this.operations.get(id);
     if (operation) {
-      this.update(operation, { focus: null, pressing: false });
+      this.update(operation, { focus: null });
       this.interrupt(id);
     }
     this.notify();
-  }
-  setPressing(id: string, pressing: boolean): void {
-    if (this.target?.draft.id !== id) return;
-    const operation = this.operations.get(id);
-    if (operation) this.update(operation, { pressing });
-    else { this.view = { ...this.view, pressing }; this.notify(); }
   }
   focusTarget(selection?: Selection, id = this.target?.draft.id): void {
     const target = this.target;
@@ -226,7 +219,7 @@ export class SpeechService {
   interrupt(id = this.target?.draft.id): void {
     const operation = id ? this.operations.get(id) : undefined;
     if (!operation) return;
-    this.update(operation, { pressing: false, focus: null });
+    this.update(operation, { focus: null });
     if (operation.state.phase === 'permission') this.cancel(id);
     else if (operation.state.phase === 'recording') void this.stop(id);
   }
@@ -260,7 +253,7 @@ export class SpeechService {
     if (!operation.recording) return;
     const completion = operation.completion = {};
     const current = () => this.current(operation) && operation.completion === completion;
-    this.update(operation, { phase: 'stopping', pressing: false, holdingAtLimit: false, level: 0, error: null, recovery: null });
+    this.update(operation, { phase: 'stopping', holdingAtLimit: false, level: 0, error: null, recovery: null });
     if (!current()) return;
     try {
       // stop() releases physical capture synchronously, before another draft may open the microphone.
@@ -362,7 +355,7 @@ export class SpeechService {
     operation.completion = undefined;
     if (this.capture === operation) this.capture = null;
     this.release(operation);
-    this.update(operation, { phase: 'retry', pressing: false, holdingAtLimit: false, level: 0,
+    this.update(operation, { phase: 'retry', holdingAtLimit: false, level: 0,
       recovery: operation.conflicted && operation.transcript ? { ...operation.identity, text: operation.transcript } : null });
     this.error(operation, error);
   }
