@@ -38,6 +38,7 @@ test('input middleware preserves native textarea props and keeps decision microp
   let service!: SpeechService;
   let phase: SpeechSnapshot['phase'] = 'idle';
   let error: string | null = null;
+  let notice: string | null = null;
   let holding = false;
   let focused = false;
   let level = 0;
@@ -66,7 +67,7 @@ test('input middleware preserves native textarea props and keeps decision microp
       useCallback: (fn: unknown) => fn,
       useSyncExternalStore: (_subscribe: unknown, snapshot: () => unknown) => {
         const value = snapshot();
-        return value && typeof value === 'object' && 'phase' in value ? { ...value, phase, error, level }
+        return value && typeof value === 'object' && 'phase' in value ? { ...value, phase, error, notice, level }
           : typeof value === 'boolean' ? holding : value;
       },
       useLayoutEffect: (effect: () => void | (() => void)) => { const cleanup = effect(); if (cleanup) effects.push(cleanup); },
@@ -262,6 +263,15 @@ test('input middleware preserves native textarea props and keeps decision microp
         ((row.children[3] as Element).props.onClick as () => void)();
         assert.equal(service.getSnapshot().phase, 'idle');
       }
+    }
+    notice = '当前问题参考不可用，将仅根据录音转写。';
+    for (const current of ['permission', 'recording', 'stopping', 'transcribing'] as const) {
+      phase = current;
+      const label = Status()!.children[1] as Element;
+      assert.match(String(label.children[0]), /正在/);
+      assert.ok(String(label.children[0]).includes(notice), 'audio-only fallback must be visible during capture and upload');
+      assert.equal(label.props.role, 'status');
+      assert.equal(label.props.title, label.children[0]);
     }
   } finally { cleanupEffects(); for (const dispose of disposers) dispose(); }
 });

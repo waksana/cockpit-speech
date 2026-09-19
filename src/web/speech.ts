@@ -1,6 +1,6 @@
 import type { ChatWindowSnapshot, DraftPurpose, HostSnapshot, ModuleDraft, ReadonlyState } from '@cockpit/module-api';
 import { SpeechError } from '../shared/limits.ts';
-import { recentContext } from './context.ts';
+import { askContext, recentContext } from './context.ts';
 import type { Recording, RecordingPreparation, PrepareRecording } from './recorder.ts';
 import type { CreateSession } from './transport.ts';
 
@@ -183,7 +183,12 @@ export class SpeechService {
     });
     this.view = idle;
     try {
-      operation.context = recentContext(this.options.host.getSnapshot(), this.options.chatWindow.getSnapshot(), target.draft.sessionId);
+      operation.context = target.draft.purpose.kind === 'ask'
+        ? askContext(snapshot.askContext)
+        : recentContext(this.options.host.getSnapshot(), this.options.chatWindow.getSnapshot(), target.draft.sessionId);
+      if (target.draft.purpose.kind === 'ask' && !operation.context) {
+        operation.state = { ...operation.state, notice: '当前问题参考不可用，将仅根据录音转写。' };
+      }
       operation.release = target.draft.block('正在录音或转写，请完成后再发送。');
       this.captureLease(operation);
       // A synchronous host notification can retire or interrupt the owner while acquiring its lease.
