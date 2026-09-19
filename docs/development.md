@@ -61,18 +61,32 @@ The returned WebSocket origin/path is locally constructed and strictly validated
   its lease, while keeping bounded PCM available for explicit replay.
   Connections close independently of draft insertion. No automatic reconnect,
   retry, backend audio upload or disk persistence exists.
-- `speech.ts` owns the exact draft, original revision/selection/context and lease.
-  Failure releases the lease but retains replayable audio for that input only.
-  Retry reacquires a lease; replacement/navigation/cancellation destroys the
-  recording. Each composed snapshot replaces the original selected region,
+- `speech.ts` owns a map of exact draft lifetimes, each with its original
+  revision/selection/context, state, audio and lease. There is one capture owner,
+  but no count limit/eviction or network concurrency queue. Failure releases the
+  lease and retains audio; retry reacquires only that draft's lease. Replacement,
+  navigation and hiding stop capture and complete the original task in the
+  background. Permission-stage departure aborts rather than starting later.
+  Explicit cancel/clear, module disposal and host-observed permanent retirement
+  destroy the owned task. The user-approved `AUDIO_TOO_SHORT` exception also
+  discards an unusable under-100-ms take; other device/network failures retain it.
+  Superseded callbacks cannot affect another attempt.
+- Host `draftLifecycleVersion: 1` exposes observable `snapshot.retired` and
+  `editTextIfRevision(text, revision)`. Completion releases its own lease, then
+  asks the host for a synchronous guarded write. Revision, pending/unconfirmed,
+  competing leases, retirement, revocation and persistence failure remain host
+  boundaries. On conflict, audio and text remain until manual insertion/discard;
+  no hidden textarea lookup or native send is used. The visible target only
+  governs starting/retrying, focus and UI projection, never background ownership.
+- Each live composed snapshot replaces the original selected region,
   advancing only the expected revision from its own write. External revisions,
   peer blocks and pending/unconfirmed drafts stop automatic updates; the latest
   composed result stays recoverable. Empty results never delete a selection;
   an empty final restores an owned provisional replacement. Superseded attempt
   callbacks cannot affect the new attempt. Clear/cancel preserve text already
   written, and no messages are submitted automatically.
-  Recovery insertion/discard in retry state first terminates the retained
-  operation; displayed recovery controls do not depend on a later successful retry.
+  Recovery insertion releases retained audio only after a successful guarded
+  write; displayed recovery controls do not depend on a later successful retry.
 
 Reused credentials may produce equal Azure session IDs despite isolated
 connections. Local object ownership and committed-item matching, not provider
@@ -108,7 +122,7 @@ stays mounted inside a module-owned flex region. Only an empty, unfocused,
 writable input gets the non-editing overlay; focus/blur chain the native handlers.
 The layer stays mounted for pointer capture while held, but its hint disappears
 during recording so it does not cover live text. Owned speech writes do not
-cancel the hold; external edits still do. Incremental writes never steal focus
+interrupt the hold; external edits still do. Incremental writes never steal focus
 or reset selection; focus restoration happens only at successful completion.
 The layer is transparent; its hint is leading-aligned and vertically centered. Only while it is
 present does Base receive an empty placeholder, avoiding overlapping hints;
@@ -120,9 +134,12 @@ release for a 64 CSS pixel upward swipe from the press origin. Once cancelled,
 ownership and timer clear before capture release, then existing speech
 cancellation destroys the recording. Other directions can leave the original
 input without cancelling. Release while starting cancels; only release during
-recording stops/transcribes. Unmount, draft/host invalidation, visibility loss,
-window blur, resize and Escape/Tab cancel; unrelated scrolling does not.
-The independent microphone button and post-stop retry/recovery paths are unchanged.
+recording stops/transcribes. Unmount, temporary draft/host unavailability,
+visibility loss, pointer capture loss, window blur, resize and Tab interrupt:
+they detach gesture ownership and stop/transcribe without discarding audio.
+Escape and upward swipe still explicitly cancel. Late release/capture-loss events
+cannot cancel an interrupted background task. Unrelated scrolling does not
+interrupt. Button capture receives the same page/host interruption handling.
 
 Both hold and microphone-button recordings use the same status feedback.
 The status marker's 7px dot scales from 1 to 2; the stop icon never scales.
@@ -135,7 +152,7 @@ phase. Short-tap focus still uses the completed click.
 
 Hold starts pass `waitForStop` to the recording preparation. At the render or wall
 limit capture stops, but the transport queue's sealed view stays false until the
-explicit release calls stop. Thus a capped buffer does not initiate the final
+release or navigation interruption calls stop. Thus a capped buffer does not initiate the final
 client commit/drain while held; server VAD may already have committed and
 transcribed speech turns. Upward cancellation clears audio and future callbacks
 even after capture has stopped, without undoing already-written draft text. The

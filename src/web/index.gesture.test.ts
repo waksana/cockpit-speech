@@ -66,7 +66,7 @@ async function fixture(t: TestContext, pointerType: 'mouse' | 'touch') {
   const host = { getSnapshot: () => ({ sessionId: 's', visible: true, connected: true }), subscribe: () => () => {} };
   let service!: SpeechService;
   const context = {
-    apiVersion: 2, uiVersion: 1, chatWindowVersion: 1, composerInputVersion: 1,
+    apiVersion: 2, uiVersion: 1, chatWindowVersion: 1, composerInputVersion: 1, draftLifecycleVersion: 1,
     signal: new AbortController().signal,
     request: (_path: string, init: RequestInit) => {
       requests++;
@@ -105,9 +105,10 @@ async function fixture(t: TestContext, pointerType: 'mouse' | 'touch') {
   } as unknown as ModuleFrontendContext;
   const draft: ModuleDraft = {
     id: 'd', sessionId: 's', purpose: { kind: 'prompt' }, subscribe: () => () => {},
-    getSnapshot: () => ({ text: '', revision: 0, pending: false, unconfirmed: false, hasContent: false,
+    getSnapshot: () => ({ text: '', revision: 0, pending: false, unconfirmed: false, retired: false, hasContent: false,
       blocks: leases ? [{ id: 'lease', reason: 'speech' }] : [] }),
     editText: () => assert.fail('no transcript expected'),
+    editTextIfRevision: () => assert.fail('no transcript expected'),
     block: () => { leases++; return () => { leases--; }; },
   };
   const frontend = await activate(context);
@@ -122,7 +123,7 @@ async function fixture(t: TestContext, pointerType: 'mouse' | 'touch') {
   if (input.boundary !== 'composerInput' || status.boundary !== 'composerEditor') assert.fail('missing middleware');
   const Input = input.wrap(() => null) as unknown as (props: ComposerInputProps) => Element;
   const StatusEditor = status.wrap(() => null) as unknown as (props: { draft: ModuleDraft }) => Element;
-  const Status = (StatusEditor({ draft }).children[0] as Element).type as () => Element | null;
+  const Status = (StatusEditor({ draft }).children[0] as Element).type as (props: { id: string }) => Element | null;
   const editor = {
     ownerDocument: { activeElement: null as unknown },
     getBoundingClientRect: () => ({ left: 0, right: 200, top: 0, bottom: 80 }),
@@ -141,7 +142,7 @@ async function fixture(t: TestContext, pointerType: 'mouse' | 'touch') {
     (base.props.editorRef as (node: unknown) => void)(editor);
     for (const effect of effects) effect();
     effects = [];
-    return Status();
+    return Status({ id: draft.id });
   };
   assert.equal(render(), null);
   assert.equal(render(), null, 'render the target registered by the initial layout effect');

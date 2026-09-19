@@ -42,7 +42,10 @@ export function prepareRecording(
     if (!waitForStop) { limit(); return; }
     captureActive = false;
     void audio.stop().then(limit, error => {
-      if (!combined.aborted) fail(error instanceof SpeechError ? error : new SpeechError('AUDIO_FAILED', '停止本地录音失败。'));
+      if (!combined.aborted) {
+        attempt?.abort(error);
+        fail(error instanceof SpeechError ? error : new SpeechError('AUDIO_FAILED', '停止本地录音失败。'));
+      }
     });
   }, env, (value, seconds) => onLevel?.(value, seconds));
   let started = false;

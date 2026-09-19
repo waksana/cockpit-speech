@@ -1,3 +1,32 @@
+# Cockpit Speech 0.5.0
+
+Draft-owned recording lifecycle for waksana/cockpit-speech#11, paired with
+waksana/cockpit#57 and the exact SDK SHA in `tooling/host-sdk.json`.
+
+- Session/tab navigation and ask replacing prompt stop capture, not the task.
+  Background transmission and transcription write only to the captured draft.
+  Leaving during startup cancels acquisition, including late permission grants.
+- Failed tasks restore their error/retry when the original input returns.
+  Revision/write conflicts keep audio plus text for explicit recovery. Status,
+  controls and late callbacks are scoped to draft identity, not the current input.
+- User-confirmed exception: an explicit under-100-ms `AUDIO_TOO_SHORT` error
+  discards that unusable take like cancellation, without retaining a retry task.
+  Other failure codes do not trigger this discard.
+- Host-confirmed ended decisions/deleted sessions release their tasks; temporary
+  hiding/unloading does not. Successful guarded insertion, explicit clear/discard
+  and module/page teardown also release resources. There is no cross-refresh
+  retention or audio storage in IndexedDB/localStorage.
+- One microphone captures at a time. User-selected independent per-draft
+  transmission has no task-count/concurrency cap or silent eviction. Existing
+  unfinished tasks cannot be replaced by a new recording in the same draft.
+- Upward swipe and Escape remain explicit discard. Navigation/pointer loss
+  detach the gesture and complete capture, including at the held audio limit.
+  Browser background freezing can delay or fail work; manual retry remains.
+
+Synthetic lifecycle coverage is not Windows/iOS hardware verification.
+No deployment, service restart, tag or Release is performed by this source change.
+---
+
 # Cockpit Speech 0.4.0
 
 Related to #8 and #9. Retains the Cockpit 0.2.6 SDK pin and public status UI.
