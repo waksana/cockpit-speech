@@ -23,6 +23,7 @@
   flex: 0 1 auto;
   min-height: 0;
   max-height: 35dvh;
+  margin-block: 0.5rem 0.75rem;
   overflow-y: auto;
   color: var(--ck-color-text);
   background: var(--ck-color-surface);
