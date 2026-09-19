@@ -205,6 +205,7 @@ for (const pointerType of ['mouse', 'touch'] as const) {
     assert.equal((f.render()!.children[1] as Element).children[0], '正在录音');
     f.event('onPointerUp');
     assert.equal(f.service.getSnapshot().phase, 'stopping');
+    assert.equal((f.render()!.children[1] as Element).children[0], '正在处理录音…');
     assert.equal(f.values().intents, 1, 'only active release captures the original draft send intent');
     assert.equal(f.values().trackStops, 1);
     f.event('onClick');
