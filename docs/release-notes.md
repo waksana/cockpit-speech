@@ -1,3 +1,27 @@
+# Cockpit Speech 0.6.0
+
+Active hold-release submission for #16, building on #11 and the native captured
+draft submission contract in waksana/cockpit#59. The precise SDK pin is in
+`tooling/host-sdk.json`; runtime requires `draftSubmissionVersion: 1`.
+
+- Normal active release submits the original input once after complete
+  transcription. Prompt-origin work stays ordinary original-session queue input;
+  ask/plan-origin work follows that original input's native answer/feedback logic.
+  A later session switch or ask does not change the captured purpose or consent.
+- Button recording and interruption before release stay draft-only. Explicit
+  cancellation, startup release, short taps and late pointer events do not send.
+  The merged #13 short-tap feedback fix is preserved.
+- Full-draft sends include existing attachments, but external text or attachment
+  changes after release prevent automatic sending. Empty recognition sends
+  nothing, including no attachment-only send. Multi-turn VAD submits only once.
+- Transcription failure retains audio and release intent for manual retry.
+  Native send errors/unknown ACK retain audio and text with a separate status;
+  there is no blind resend, and clearing local audio cannot retract a message.
+
+No deployment/restart or Windows/iOS real-device verification is performed.
+
+---
+
 # Cockpit Speech 0.5.0
 
 Draft-owned recording lifecycle for waksana/cockpit-speech#11, paired with

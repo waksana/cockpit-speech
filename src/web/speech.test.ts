@@ -34,6 +34,7 @@ function draft(id = 'draft-1', purpose: DraftPurpose = { kind: 'prompt' }): Modu
       this.editText(text);
       return true;
     },
+    captureSend: () => assert.fail('Draft-only lifecycle must not capture send permission'),
     block(reason) {
       const block = { id: 'speech-lease', reason };
       state.set({ ...state.getSnapshot(), blocks: [...state.getSnapshot().blocks, block] });

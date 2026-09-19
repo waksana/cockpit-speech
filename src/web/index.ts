@@ -18,8 +18,9 @@ export function composeEditorRef(local: { current: HTMLTextAreaElement | null },
 
 export const activate: ActivateFrontend = context => {
   if (context.apiVersion !== 2 || context.uiVersion !== 1 || context.chatWindowVersion !== 1
-    || context.composerInputVersion !== 1 || context.draftLifecycleVersion !== 1 || !context.state?.chatWindow || !context.state.bindDraft) {
-    throw new Error('语音模块需要前端 API v2、UI v1、chatWindow v1、composerInput v1 和 draftLifecycle v1，请先升级配套宿主。');
+    || context.composerInputVersion !== 1 || context.draftLifecycleVersion !== 1 || context.draftSubmissionVersion !== 1
+    || !context.state?.chatWindow || !context.state.bindDraft) {
+    throw new Error('语音模块需要前端 API v2、UI v1、chatWindow v1、composerInput v1、draftLifecycle v1 和 draftSubmission v1，请先升级配套宿主。');
   }
   const React = context.react;
   const h = React.createElement;
@@ -48,18 +49,21 @@ export const activate: ActivateFrontend = context => {
     if (state.phase === 'idle' && !state.recovery && !state.notice) return null;
     const recording = state.phase === 'recording';
     const capturing = recording && !state.holdingAtLimit;
-    const processing = state.phase === 'stopping' || state.phase === 'transcribing';
+    const processing = state.phase === 'stopping' || state.phase === 'transcribing' || state.phase === 'sending';
     const retry = state.phase === 'retry';
+    const sendError = state.phase === 'send-error';
     const retryHint = speech.hasRetainedRecording(id)
       ? (speech.canRetry(id) ? '录音已保留，点击话筒重试。' : '录音已保留，当前无法重试，可清除后重新录音。')
       : '请点击话筒重新录音。';
-    const label = retry ? `${state.error ?? '语音失败。'}${retryHint}`
+    const label = sendError ? state.error!
+      : state.phase === 'sending' ? '正在提交原输入框的消息…'
+      : retry ? `${state.error ?? '语音失败。'}${retryHint}${state.sendRequested ? '转写成功后仍会尝试原输入框的发送。' : ''}`
       : preparing ? '正在准备录音…'
         : state.recovery ? '识别结果未写入草稿，请在下方恢复。'
-          : recording ? (state.holdingAtLimit ? '已达两分钟，松手结束录音' : '正在录音')
-            : state.notice ?? '正在处理录音…';
+          : recording ? (state.holdingAtLimit ? '已达两分钟，松手发送' : '正在录音')
+            : state.notice ?? (state.sendRequested ? '正在处理录音，完成后发送原输入框…' : '正在处理录音…');
     const time = `${String(Math.floor(state.elapsedSeconds / 60)).padStart(2, '0')}:${String(state.elapsedSeconds % 60).padStart(2, '0')}`;
-    return h('div', { className: `ck-input-status ck-status-text cockpit-speech-status ${capturing || retry ? 'ck-danger' : 'ck-text-secondary'}` },
+    return h('div', { className: `ck-input-status ck-status-text cockpit-speech-status ${capturing || retry || sendError ? 'ck-danger' : 'ck-text-secondary'}` },
       h('span', { className: 'ck-status-marker', 'aria-hidden': true },
         preparing || processing ? h('span', { className: 'cockpit-speech-spinner cockpit-speech-status-spinner' })
           : capturing ? h('span', { className: 'cockpit-speech-level',
@@ -69,18 +73,21 @@ export const activate: ActivateFrontend = context => {
       recording ? h('span', { className: 'cockpit-speech-time', 'aria-label': `录音时长 ${state.elapsedSeconds} 秒` }, time) : null,
       !recording ? h('button', {
         type: 'button', className: 'ck-icon-button ck-status-action', 'aria-label': '清除本次语音',
-        title: '清除本次录音、识别结果和错误，保留已有草稿', onClick: () => speech.clear(id),
+        title: state.phase === 'sending' || state.sendOutcome === 'unconfirmed'
+          ? '清除本地录音和结果，不会撤回可能已经提交的消息'
+          : '清除本次录音、识别结果和错误，保留已有草稿', onClick: () => speech.clear(id),
       }, h(Icon, { name: 'close', className: 'ck-icon-sm' })) : null);
   }
   function SpeechPanel({ id }: { id: string }) {
     const state = useSpeech(id);
     React.useSyncExternalStore(context.state.host.subscribe, context.state.host.getSnapshot);
-    const active = state.phase !== 'idle' && state.phase !== 'retry';
+    const active = state.phase !== 'idle' && state.phase !== 'retry' && state.phase !== 'send-error';
     const recovery = state.recovery;
     return (!active && recovery) ? h('section', { className: 'cockpit-speech-panel', 'aria-label': '识别结果恢复' },
       recovery ? h(React.Fragment, null,
         state.error || state.notice ? h('p', { role: 'status' }, state.error ?? state.notice) : null,
-        h('label', null, '识别结果（未发送）', h('textarea', { className: 'ck-input', value: recovery.text, readOnly: true, rows: 4 })),
+        h('label', null, state.sendOutcome === 'unconfirmed' ? '识别结果（发送状态未确认）' : '识别结果（未发送）',
+          h('textarea', { className: 'ck-input', value: recovery.text, readOnly: true, rows: 4 })),
         h('div', { className: 'cockpit-speech-recovery-actions' },
           h('button', { type: 'button', className: 'ck-button', onClick: () => {
             void (async () => {
@@ -97,6 +104,7 @@ export const activate: ActivateFrontend = context => {
   return {
     apiVersion: 2,
     writes: ['text'],
+    sends: ['draft'],
     components: [{
       id: 'speech-input', boundary: 'composerInput',
       wrap: Base => function SpeechInput(props: ComposerInputProps) {
@@ -116,7 +124,7 @@ export const activate: ActivateFrontend = context => {
           bounds: () => input.current?.getBoundingClientRect(),
           phase: () => speech.getSnapshot(draft.id).phase,
           start: () => { void speech.start('hold', draft.id); },
-          stop: () => { void speech.stop(draft.id); },
+          stop: () => { void speech.releaseHold(draft.id); },
           cancel: () => speech.cancel(draft.id),
           interrupt: () => speech.interrupt(draft.id),
           focus: () => input.current?.focus(),
@@ -165,14 +173,17 @@ export const activate: ActivateFrontend = context => {
           input.current?.setSelectionRange(focus.selection.start, focus.selection.end);
         }, [state.focus, draft.id, snapshot.revision, props.disabled]);
         const retry = state.phase === 'retry';
-        const active = state.phase !== 'idle' && !retry;
+        const sendError = state.phase === 'send-error';
+        const active = state.phase !== 'idle' && !retry && !sendError;
         const busy = active && state.phase !== 'recording';
-        const label = state.phase === 'recording' ? (state.holdingAtLimit ? '录音已达两分钟，松手结束录音' : '停止录音并收取剩余文字')
+        const label = state.phase === 'recording' ? (state.holdingAtLimit ? '录音已达两分钟，松手发送' : '停止录音并收取剩余文字')
           : state.phase === 'permission' ? '正在启动麦克风'
               : state.phase === 'stopping' ? '正在提交录音'
                 : state.phase === 'transcribing' ? '正在转写录音'
-                  : retry ? `语音失败，点击重试。${state.error ?? ''}` : '开始语音输入';
-        const disabled = busy || (!active && (props.disabled || props.sendBlocked || !(retry ? speech.canRetry(draft.id) : speech.canStart(draft.id))));
+                  : state.phase === 'sending' ? '正在提交原输入框的消息'
+                    : sendError ? state.error!
+                      : retry ? `语音失败，点击重试。${state.error ?? ''}` : '开始语音输入';
+        const disabled = sendError || busy || (!active && (props.disabled || props.sendBlocked || !(retry ? speech.canRetry(draft.id) : speech.canStart(draft.id))));
         const button = h('button', {
           type: 'button', className: `ck-icon-button cockpit-speech-mic${retry ? ' cockpit-speech-retry' : ''}`, disabled,
           'aria-label': label, title: state.error ?? label, 'aria-pressed': state.phase === 'recording', 'aria-busy': busy,
@@ -180,11 +191,11 @@ export const activate: ActivateFrontend = context => {
             gesture.interrupt();
             if (state.phase === 'recording') void speech.stop(draft.id);
             else if (retry) void speech.retry(draft.id);
-            else if (!busy) void speech.start('button', draft.id);
+            else if (!busy && !sendError) void speech.start('button', draft.id);
           },
         }, busy ? h('span', { className: 'cockpit-speech-spinner', 'aria-hidden': true })
           : state.phase === 'recording' ? h(Icon, { name: 'stop', className: 'ck-icon-md cockpit-speech-stop' })
-            : h(Icon, { name: retry ? 'retry' : 'mic' }));
+            : h(Icon, { name: sendError ? 'error' : retry ? 'retry' : 'mic' }));
         const showGesture = holding || (!focused && props.value === '' && snapshot.text === ''
           && !props.disabled && !props.sendBlocked && speech.canStart(draft.id));
         return h(React.Fragment, null,
@@ -207,7 +218,7 @@ export const activate: ActivateFrontend = context => {
               onContextMenu: event => event.preventDefault(),
               // Keep the touch target mounted through release; focus in the completed click gesture.
               onClick: event => { event.preventDefault(); gesture.click(); },
-            }, holding && active ? '' : '轻点输入，按住说话') : null,
+            }, holding && active ? '' : '轻点输入，按住说话，松手发送') : null,
           ), button,
         );
       },

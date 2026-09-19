@@ -1,4 +1,4 @@
-import type { ChatWindowSnapshot, DraftPurpose, HostSnapshot, ModuleDraft, ReadonlyState } from '@cockpit/module-api';
+import type { CapturedDraftSend, ChatWindowSnapshot, DraftPurpose, HostSnapshot, ModuleDraft, ReadonlyState } from '@cockpit/module-api';
 import { SpeechError } from '../shared/limits.ts';
 import { recentContext } from './context.ts';
 import type { Recording, RecordingPreparation, PrepareRecording } from './recorder.ts';
@@ -9,7 +9,9 @@ export interface Target { draft: ModuleDraft; disabled: boolean; sendBlocked: bo
 interface Identity { id: string; sessionId: string; purpose: string }
 export interface Recovery extends Identity { text: string }
 export interface SpeechSnapshot {
-  phase: 'idle' | 'permission' | 'recording' | 'stopping' | 'transcribing' | 'retry';
+  phase: 'idle' | 'permission' | 'recording' | 'stopping' | 'transcribing' | 'retry' | 'sending' | 'send-error';
+  sendRequested: boolean;
+  sendOutcome: 'blocked' | 'unconfirmed' | null;
   elapsedSeconds: number;
   holdingAtLimit: boolean;
   level: number;
@@ -27,6 +29,8 @@ interface Operation {
   transcript: string;
   appliedText?: string;
   conflicted: boolean;
+  readonly mode: 'button' | 'hold';
+  sendIntent?: CapturedDraftSend;
 }
 export interface SpeechOptions {
   signal: AbortSignal;
@@ -39,7 +43,7 @@ export interface SpeechOptions {
 const purposeKey = (purpose: DraftPurpose) => purpose.kind === 'prompt' ? 'prompt' : `${purpose.kind}:${purpose.requestId}`;
 const identity = (draft: ModuleDraft): Identity => ({ id: draft.id, sessionId: draft.sessionId, purpose: purposeKey(draft.purpose) });
 const matches = (a: Identity, b: Identity) => a.id === b.id && a.sessionId === b.sessionId && a.purpose === b.purpose;
-const idle: SpeechSnapshot = { phase: 'idle', elapsedSeconds: 0, holdingAtLimit: false,
+const idle: SpeechSnapshot = { phase: 'idle', sendRequested: false, sendOutcome: null, elapsedSeconds: 0, holdingAtLimit: false,
   level: 0, error: null, notice: null, recovery: null, focus: null };
 
 export function insertText(text: string, addition: string, selection: Selection): string {
@@ -136,13 +140,14 @@ export class SpeechService {
     operation.leaseId = blocks.length === 1 ? blocks[0]!.id : undefined;
   }
   private writeTranscript(operation: Operation, text: string): void {
-    if (!this.current(operation) || operation.state.phase === 'retry' || operation.state.phase === 'idle') return;
+    if (!this.current(operation) || !['permission', 'recording', 'stopping', 'transcribing'].includes(operation.state.phase)) return;
     operation.transcript = text;
     if (operation.conflicted) return;
     try {
       const snapshot = operation.draft.getSnapshot();
       const target = this.target;
-      const gated = target && matches(operation.identity, identity(target.draft)) && (target.disabled || target.sendBlocked);
+      const gated = !operation.state.sendRequested && target
+        && matches(operation.identity, identity(target.draft)) && (target.disabled || target.sendBlocked);
       if (gated || snapshot.retired || snapshot.revision !== operation.revision || snapshot.pending || snapshot.unconfirmed
         || snapshot.blocks.some(block => block.id !== operation.leaseId)) {
         operation.conflicted = true; return;
@@ -171,7 +176,7 @@ export class SpeechService {
       identity: identity(target.draft), draft: target.draft, revision: snapshot.revision,
       text: snapshot.text, selection: target.selection(), controller: new AbortController(),
       release: () => {}, unsubscribe: () => {}, state: { ...idle, phase: 'permission' },
-      transcript: '', conflicted: false,
+      transcript: '', conflicted: false, mode,
     };
     this.operations.set(operation.identity.id, operation);
     this.capture = operation;
@@ -228,6 +233,18 @@ export class SpeechService {
     if (!operation?.recording || operation.state.phase !== 'recording') return;
     await this.complete(operation, false);
   }
+  async releaseHold(id = this.target?.draft.id): Promise<void> {
+    const operation = id ? this.operations.get(id) : undefined;
+    if (!operation || operation.mode !== 'hold' || operation.state.phase !== 'recording'
+      || this.target?.draft.id !== id || !this.hostReady(operation.identity.sessionId)) return;
+    // Capture consent before ending acquisition; later navigation cannot redirect or undo it.
+    try { operation.sendIntent = operation.draft.captureSend(); }
+    catch {
+      this.update(operation, { sendOutcome: 'blocked' });
+    }
+    this.update(operation, { sendRequested: true });
+    await this.stop(id);
+  }
   canRetry(id = this.target?.draft.id): boolean {
     const operation = id ? this.operations.get(id) : undefined;
     return !!operation && operation.state.phase === 'retry' && !this.disposed && !!this.target && this.target.draft.id === id
@@ -269,10 +286,16 @@ export class SpeechService {
       if (!current()) return;
       try {
         const target = this.target;
-        const gated = target && matches(operation.identity, identity(target.draft)) && (target.disabled || target.sendBlocked);
+        const gated = !operation.state.sendRequested && target
+          && matches(operation.identity, identity(target.draft)) && (target.disabled || target.sendBlocked);
         const next = text ? insertText(operation.text, text, operation.selection) : operation.text;
         if (gated || operation.conflicted || !operation.draft.editTextIfRevision(next, operation.revision)) {
           this.update(operation, { notice: '草稿已修改或暂时无法写入。识别结果和录音已保留，可复制或手动插入原输入框。' });
+          return;
+        }
+        operation.revision++;
+        if (operation.state.sendRequested && text.trim()) {
+          await this.send(operation, text);
           return;
         }
         this.finish(operation);
@@ -287,6 +310,34 @@ export class SpeechService {
         this.error(operation, new SpeechError('DRAFT_CONFLICT', '无法修改原输入框，识别结果和录音已保留。'));
       }
     } catch (error) { if (current()) this.fail(operation, error); }
+  }
+  private async send(operation: Operation, text: string): Promise<void> {
+    if (!this.current(operation)) return;
+    if (!operation.sendIntent) {
+      this.sendFailed(operation, text, 'blocked');
+      return;
+    }
+    this.update(operation, { phase: 'sending', recovery: null, error: null, notice: null });
+    if (!this.current(operation)) return;
+    try {
+      const result = await operation.sendIntent.send(operation.revision);
+      if (!this.current(operation)) return;
+      if (result.status === 'acknowledged') {
+        this.finish(operation);
+        this.notify();
+      } else this.sendFailed(operation, text, result.status);
+    } catch {
+      // Once dispatch was attempted, a thrown error cannot establish that nothing was sent.
+      this.sendFailed(operation, text, 'unconfirmed');
+    }
+  }
+  private sendFailed(operation: Operation, text: string, outcome: 'blocked' | 'unconfirmed'): void {
+    this.update(operation, { phase: 'send-error', sendOutcome: outcome,
+      recovery: { ...operation.identity, text }, notice: null,
+      error: outcome === 'blocked'
+        ? '自动发送未执行。录音和文字已保留，请确认原草稿后使用原发送按钮。'
+        : '发送结果未确认，可能已提交；不会自动重发。录音和文字已保留，请先检查原会话的消息或队列。',
+    });
   }
   canInsert(id = this.target?.draft.id): boolean {
     const operation = id ? this.operations.get(id) : undefined;
@@ -334,6 +385,7 @@ export class SpeechService {
     this.operations.delete(operation.identity.id);
     if (this.capture === operation) this.capture = null;
     operation.unsubscribe();
+    operation.sendIntent?.cancel();
     operation.controller.abort();
     operation.preparation?.cancel();
     operation.recording?.cancel();
@@ -345,7 +397,7 @@ export class SpeechService {
     release();
   }
   private fail(operation: Operation, error: unknown): void {
-    if (!this.current(operation)) return;
+    if (!this.current(operation) || operation.state.phase === 'sending' || operation.state.phase === 'send-error') return;
     if (error instanceof SpeechError && error.code === 'AUDIO_TOO_SHORT') {
       this.finish(operation);
       if (this.target?.draft.id === operation.identity.id) this.view = idle;

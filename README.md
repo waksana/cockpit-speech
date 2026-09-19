@@ -4,7 +4,7 @@ Standalone, GPL-3.0-only Cockpit dictation using **Azure OpenAI gpt-transcribe,
 browser-direct WebSocket, local audio buffering and captured chat context**.
 The backend only exchanges its resource key for short-lived credentials; it
 never receives audio, context or transcripts. No Entra business authentication,
-speech SDK, postprocessor, settings page or automatic submission is required.
+speech SDK, postprocessor or settings page is required.
 
 ## One-button dictation
 
@@ -37,23 +37,47 @@ continuous sentence is still being spoken. Text deltas update the original
 selection as they arrive; each final transcript replaces that turn's provisional
 text rather than appending it again. All available turns are composed in speech
 order, even if earlier turns are still empty. Late earlier text can move later
-text to the right. Nothing is sent automatically. If the draft changed, its text is not overwritten:
+text to the right. The microphone-button entry only writes a draft, never sends.
+If the draft changed, its text is not overwritten:
 the separate result recovery field offers copy, explicit insertion at the
 current caret, or discard. Only this conflict recovery adds a result panel.
 
 ## Hold to talk on an empty input
 
 An empty, unfocused, writable input displays a non-editing gesture layer:
-**轻点输入，按住说话**. A short tap focuses the real textarea for typing or
+**轻点输入，按住说话，松手发送**. A short tap focuses the real textarea for typing or
 native selection/paste. Before the 300 ms hold threshold, pressing does not
 show or announce recording status, change the layout or acquire the microphone.
 Preparation feedback starts only when microphone startup begins. Once ready, the status
 row's red dot changes size with captured volume; the button is a static red stop
-square. Text can appear while held. Release stops capture, uploads its remaining
-tail and waits for outstanding transcription, never sending a message.
+square. Text can appear while held. A normal active release stops capture, uploads
+its remaining tail and waits for the complete transcription, then submits the
+original input draft once through its normal native send logic.
 Release before readiness cancels instead. Clicking the microphone uses the
 same status row and clicking the stop square ends capture.
 There is no full-screen shade or parallel editor.
+
+Release locks the original input's send intent: a prompt sends an ordinary
+message to its original session (using the native queue even if an ask appears
+after release); an ask answers that original live question; a plan input sends
+that original plan feedback. It never uses the newly visible input's submit.
+Session/tab navigation after release does not revoke or redirect the intent.
+Navigation before release instead stops/transcribes into the original draft
+without sending. Streamed VAD turns never submit individually.
+
+The normal submission includes the original draft's existing attachments. Any
+external text or attachment/schema-content change after release prevents
+automatic sending and preserves the recording/result for manual confirmation.
+If no words are recognized, nothing is sent, even when attachments exist; they
+remain in the draft. A retired decision/session cannot submit.
+
+Transcription failure still permits manual replay; a released hold keeps its
+send intent for the successful replay, subject to the original draft guards.
+Native submission failure or uncertain acknowledgement instead preserves audio,
+text and a distinct send error, without a module resend button or another
+transcription attempt. Check the original session's messages/queue and use its
+normal host-controlled confirmation/send workflow deliberately. Clear only
+discards local speech resources; it cannot retract an already-submitted message.
 
 Swipe upward 64 CSS pixels from the initial press to cancel immediately, even
 during startup. Moving back never resumes that press, and release afterward
@@ -77,7 +101,8 @@ Focused or nonempty inputs keep native editing. To paste into an empty unfocused
 input, tap first, then use native long-press paste. Keyboard Tab still focuses
 the real textarea; the gesture layer adds no tab stop. The independent microphone
 button remains the accessible alternative and retains its existing behavior.
-Speech 0.5.0 requires the paired host's `draftLifecycleVersion: 1` capability
+Speech 0.6.0 requires the paired host's `draftLifecycleVersion: 1` and
+`draftSubmissionVersion: 1` capabilities
 as well as Cockpit's additive public UI classes. It uses the
 existing `composerEditor` middleware for the full-width status row and leaves
 queue/question layout and scrolling entirely to the host. Input hint size,
@@ -192,7 +217,8 @@ connection ends capture, but does not cancel transmission or clear failed audio.
 An already-stopped task keeps going and writes back only to its original draft,
 even while that input is absent. Returning to a failed input restores its manual
 retry. Conflicts retain both audio and recognized text until explicit recovery
-or discard. Reliable insertion, explicit discard, authoritative permanent draft
+or discard. Draft-only tasks release audio after reliable insertion; released
+holds retain it until native submission is acknowledged. Explicit discard, authoritative permanent draft
 retirement (an ended decision or deleted session), a confirmed under-100-ms
 recording, or module/page teardown releases the recording. A hidden or unloaded
 session is not a deleted session.
@@ -251,9 +277,10 @@ not used as a local ownership key. Final text must match the committed item.
 ## Development and package
 
 Requires Node **24.20.0** and pnpm **10.34.5**. The immutable SDK SHA and package
-version are recorded in `tooling/host-sdk.json`. The paired host change is
-waksana/cockpit#57. Frontend API v2/UI v1, `chatWindowVersion: 1`,
-`composerInputVersion: 1` and `draftLifecycleVersion: 1` are independently required.
+version are recorded in `tooling/host-sdk.json`. The paired host changes are
+waksana/cockpit#57 and waksana/cockpit#59. Frontend API v2/UI v1,
+`chatWindowVersion: 1`, `composerInputVersion: 1`, `draftLifecycleVersion: 1`
+and `draftSubmissionVersion: 1` are independently required.
 
 ```sh
 node scripts/sdk.mjs prepare /path/to/clean-pinned-cockpit
@@ -262,8 +289,8 @@ pnpm typecheck
 pnpm test
 pnpm build
 # After committing clean source; use a new output directory.
-node scripts/package.mjs module-output-0.5.0
-node scripts/verify-package.mjs module-output-0.5.0/cockpit-speech-0.5.0.tgz
+node scripts/package.mjs module-output-0.6.0
+node scripts/verify-package.mjs module-output-0.6.0/cockpit-speech-0.6.0.tgz
 ```
 
 Archives contain runtime code, worklet assets, licenses and exact source/SDK
