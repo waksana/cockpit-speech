@@ -9,9 +9,11 @@
   inset: 0;
   display: flex;
   align-items: center;
+  justify-content: center;
   padding-inline: 0.5rem;
+  text-align: center;
   color: var(--ck-color-text);
-  background: var(--ck-color-surface);
+  background: transparent;
   border-radius: var(--ck-radius);
   font-size: 0.875rem;
   cursor: text;

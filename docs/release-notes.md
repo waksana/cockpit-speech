@@ -5,6 +5,8 @@ installation, service restart, tag or release is performed by the source change.
 
 - Empty and unfocused writable inputs show a non-editing gesture layer. Tap to
   focus the original textarea; hold 300 ms to start local microphone acquisition.
+  The layer preserves the input's background and centers its hint; it temporarily
+  suppresses the native placeholder to avoid overlapping text.
 - User selected the non-editing gesture layer. All feedback stays in the existing
   microphone button: startup spinner, bounded red PCM-volume dot, then spinner
   while the result is written to the original draft, never sent. The standalone

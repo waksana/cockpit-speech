@@ -151,6 +151,7 @@ export const activate: ActivateFrontend = context => {
         return h(React.Fragment, null,
           h('div', { className: 'cockpit-speech-input' },
             h(Base, { ...props, editorRef: ref,
+              placeholder: showGesture ? '' : props.placeholder,
               onFocus: event => { setFocused(true); gesture.cancel(); props.onFocus?.(event); },
               onBlur: event => { setFocused(false); props.onBlur?.(event); },
             }),

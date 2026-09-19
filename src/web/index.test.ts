@@ -38,6 +38,7 @@ test('input middleware preserves native textarea props and keeps decision microp
   let phase: SpeechSnapshot['phase'] = 'idle';
   let error: string | null = null;
   let holding = false;
+  let focused = false;
   let level = 0;
   for (const key of ['window', 'document']) {
     const original = Object.getOwnPropertyDescriptor(globalThis, key);
@@ -54,7 +55,7 @@ test('input middleware preserves native textarea props and keeps decision microp
       Fragment: 'fragment',
       createElement: (type: unknown, props: Record<string, unknown> | null, ...children: unknown[]): Element => ({ type, props: props ?? {}, children }),
       useRef: (value: unknown) => ({ current: value }),
-      useState: (value: unknown) => [value, () => {}],
+      useState: () => [focused, () => {}],
       useMemo: (factory: () => unknown) => factory(),
       useCallback: (fn: unknown) => fn,
       useSyncExternalStore: (_subscribe: unknown, snapshot: () => unknown) =>
@@ -99,7 +100,7 @@ test('input middleware preserves native textarea props and keeps decision microp
         draft, operation, disabled: false, sendBlocked, value: 'controlled',
         onPaste, onKeyDown, onSubmit: nativeSubmit, onChange: nativeTextChange,
         onFocus: () => { focuses++; }, onBlur: () => { blurs++; },
-        'aria-label': 'Native editor', className: 'native-editor', rows: 1,
+        'aria-label': 'Native editor', className: 'native-editor', rows: 1, placeholder: 'Native placeholder',
       });
       const inputRegion = tree.children[0] as Element;
       assert.equal(inputRegion.props.className, 'cockpit-speech-input');
@@ -114,6 +115,7 @@ test('input middleware preserves native textarea props and keeps decision microp
       assert.equal(base.props['aria-label'], 'Native editor');
       assert.equal(base.props.className, 'native-editor');
       assert.equal(base.props.rows, 1);
+      assert.equal(base.props.placeholder, 'Native placeholder');
       (base.props.onFocus as (event: object) => void)({});
       (base.props.onBlur as (event: object) => void)({});
       assert.equal(focuses, 1); assert.equal(blurs, 1);
@@ -123,13 +125,22 @@ test('input middleware preserves native textarea props and keeps decision microp
       assert.equal(mic.props['aria-label'], '开始语音输入');
       assert.equal(mic.props.disabled, sendBlocked);
       cleanupEffects();
-      const empty = Wrapped({ draft, operation, disabled: false, sendBlocked, value: '', onSubmit: nativeSubmit, onChange: nativeTextChange });
+      const empty = Wrapped({ draft, operation, disabled: false, sendBlocked, value: '', placeholder: 'Native placeholder', onSubmit: nativeSubmit, onChange: nativeTextChange });
       const layer = (empty.children[0] as Element).children[1] as Element | null;
       assert.equal(!!layer, !sendBlocked, 'only writable empty inputs offer a gesture');
+      assert.equal(((empty.children[0] as Element).children[0] as Element).props.placeholder,
+        layer ? '' : 'Native placeholder', 'hide the native hint only while the transparent gesture layer supplies it');
       if (layer) {
         assert.equal(layer.props['aria-hidden'], true);
         assert.equal(layer.props.tabIndex, undefined, 'keyboard focus stays on the real textarea');
       }
+      cleanupEffects();
+      focused = true;
+      const editing = Wrapped({ draft, operation, disabled: false, sendBlocked: false, value: '', placeholder: 'Native placeholder', onSubmit: nativeSubmit, onChange: nativeTextChange });
+      const editingRegion = editing.children[0] as Element;
+      assert.equal(editingRegion.children[1], null);
+      assert.equal((editingRegion.children[0] as Element).props.placeholder, 'Native placeholder', 'focus restores the native hint');
+      focused = false;
       cleanupEffects();
       for (const current of ['permission', 'recording', 'stopping', 'transcribing', 'retry'] as const) {
         phase = current;
