@@ -141,26 +141,13 @@ export const activate: ActivateFrontend = context => {
             else if (retry) void speech.retry();
             else if (!busy) void speech.start();
           },
-        }, busy ? h('span', { className: 'cockpit-speech-spinner', 'aria-hidden': true }) : h(Icon, { name: retry ? 'retry' : active ? 'square' : 'mic' }));
+        }, busy ? h('span', { className: 'cockpit-speech-spinner', 'aria-hidden': true })
+          : state.phase === 'recording' ? h('span', {
+            className: 'cockpit-speech-dot', 'aria-hidden': true,
+            style: { transform: `scale(${1 + Math.min(1, state.level * 6)})` },
+          }) : h(Icon, { name: retry ? 'retry' : 'mic' }));
         const showGesture = holding || (!focused && props.value === '' && snapshot.text === ''
           && !props.disabled && !props.sendBlocked && speech.canStart());
-        const feedback = holding && (state.phase === 'permission' || state.phase === 'recording')
-          ? context.createPortal(h('div', {
-            className: 'cockpit-speech-screen',
-            onPointerDown: event => { event.preventDefault(); gesture.cancel(); },
-            onContextMenu: event => event.preventDefault(),
-          },
-          h('div', { className: 'cockpit-speech-screen-center' },
-            h('div', { className: 'cockpit-speech-visual', 'aria-hidden': true },
-              state.phase === 'permission'
-                ? h('span', { className: 'cockpit-speech-spinner' })
-                : h('div', { className: 'cockpit-speech-volume',
-                  style: { transform: `scale(${1 + Math.min(1, state.level * 6)})` } }),
-            ),
-            h('p', { role: 'status' }, state.phase === 'permission' ? '正在启动麦克风…'
-              : state.holdingAtLimit ? '已达两分钟，松手转写' : '松手转写'),
-            h('p', { className: 'cockpit-speech-screen-hint' }, '上滑取消'),
-          )), document.body) : null;
         return h(React.Fragment, null,
           h('div', { className: 'cockpit-speech-input' },
             h(Base, { ...props, editorRef: ref,
@@ -180,7 +167,7 @@ export const activate: ActivateFrontend = context => {
               onContextMenu: event => event.preventDefault(),
               onClick: event => event.preventDefault(),
             }, '轻点输入，按住说话') : null,
-          ), button, feedback,
+          ), button,
         );
       },
     }, {

@@ -29,41 +29,19 @@
   min-height: var(--ck-control-size);
   padding: 0;
   border-radius: 50%;
+  overflow: hidden;
 }
 .cockpit-speech-mic.cockpit-speech-retry { color: var(--ck-color-danger); }
-.cockpit-speech-screen {
-  position: fixed;
-  inset: 0;
-  z-index: 10000;
-  display: grid;
-  place-items: center;
-  background: color-mix(in srgb, var(--ck-color-surface) 90%, transparent);
-  color: var(--ck-color-text);
-  backdrop-filter: blur(8px);
-  touch-action: none;
-  user-select: none;
-  -webkit-user-select: none;
-  -webkit-touch-callout: none;
-}
-.cockpit-speech-screen-center { text-align: center; }
-.cockpit-speech-visual {
-  display: grid;
-  place-items: center;
-  width: min(16rem, 70vw);
-  height: min(16rem, 45dvh);
-}
-.cockpit-speech-visual .cockpit-speech-spinner { width: 3rem; height: 3rem; border-width: 3px; }
-.cockpit-speech-volume {
-  width: 5rem;
-  height: 5rem;
+.cockpit-speech-dot {
+  flex: none;
+  width: 28%;
+  height: 28%;
   border-radius: 50%;
-  background: var(--ck-color-accent);
-  box-shadow: 0 0 2rem color-mix(in srgb, var(--ck-color-accent) 30%, transparent);
+  background: var(--ck-color-danger);
   transition: transform 100ms ease-out;
 }
-.cockpit-speech-screen-hint { color: var(--ck-color-muted); }
 @media (prefers-reduced-motion: reduce) {
-  .cockpit-speech-volume { transition: none; }
+  .cockpit-speech-dot { transition: none; }
 }
 .cockpit-speech-spinner {
   box-sizing: border-box;

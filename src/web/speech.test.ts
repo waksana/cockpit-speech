@@ -63,6 +63,7 @@ function fixture(options: { permission?: boolean; purpose?: DraftPurpose; ready?
   let ready: Promise<void> = Promise.resolve();
   let readinessError: unknown;
   let retryable = true;
+  const levels: ((value: number) => void)[] = [];
   const recording: Recording = {
     stop: async committed => { stops++; await ready; if (readinessError) throw readinessError; requests++; committed?.(); return result.promise; },
     retry: async committed => { requests++; committed?.(); return retryResult.promise; },
@@ -75,7 +76,8 @@ function fixture(options: { permission?: boolean; purpose?: DraftPurpose; ready?
       capturedSignal = signal;
       recorderFailure = fail; limitReached = limit;
       return {
-        start: async (session, context) => {
+        start: async (session, context, recordingOptions) => {
+          if (recordingOptions?.onLevel) levels.push(recordingOptions.onLevel);
           captures++; capturedContext = context;
           ready = session(signal).then(() => {}, error => { readinessError = error; });
           return options.permission ? permission.promise : recording;
@@ -95,8 +97,29 @@ function fixture(options: { permission?: boolean; purpose?: DraftPurpose; ready?
   return { service, host, chatWindow, original, permission, result, retryResult, controller, reports, recording,
     setRetryable: (value: boolean) => { retryable = value; },
     values: () => ({ cancelled, stops, requests, captures, preparationsCancelled, readyCalls, capturedContext, capturedSignal }),
-    limit: () => limitReached(), fail: (e: SpeechError) => recorderFailure(e) };
+    limit: () => limitReached(), fail: (e: SpeechError) => recorderFailure(e),
+    level: (value: number, index = levels.length - 1) => levels[index]!(value) };
 }
+test('hold and button recordings publish live levels, resetting on stop and ignoring older callbacks', async t => {
+  for (const mode of ['hold', 'button'] as const) {
+    const f = fixture(); t.after(() => f.service.dispose());
+    await f.service.start(mode);
+    f.level(0.25);
+    assert.equal(f.service.getSnapshot().level, 0.25);
+    f.service.cancel();
+    f.level(0.9);
+    assert.equal(f.service.getSnapshot().level, 0);
+    await f.service.start(mode);
+    f.level(0.8, 0);
+    assert.equal(f.service.getSnapshot().level, 0);
+    f.level(0.5);
+    const stopped = f.service.stop();
+    f.level(0.9);
+    assert.equal(f.service.getSnapshot().level, 0);
+    f.result.resolve('spoken'); await stopped;
+    assert.equal(f.service.getSnapshot().level, 0);
+  }
+});
 test('prompt, ask and plan insert at the captured selection only after stop; context is captured once', async t => {
   for (const purpose of [{ kind: 'prompt' }, { kind: 'ask', requestId: 'a' }, { kind: 'plan', requestId: 'p' }] as const) {
     const f = fixture({ purpose }); t.after(() => f.service.dispose());
