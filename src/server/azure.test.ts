@@ -22,7 +22,7 @@ test('issuer uses the key only server-side, fixed GA path and context-free trans
     const body = JSON.parse(String(init?.body));
     assert.deepEqual(body, definition(config.deployment));
     assert.equal(body.session.type, 'transcription');
-    assert.deepEqual(body.session.audio.input.turn_detection, { type: 'server_vad' });
+    assert.deepEqual(body.session.audio.input.turn_detection, { type: 'server_vad', silence_duration_ms: 1000 });
     assert.equal(body.session.audio.input.transcription.model, 'dictation');
     assert.ok(typeof body.session.audio.input.transcription.prompt === 'string');
     assert.equal(body.session.audio.input.transcription.prompt, '');

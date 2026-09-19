@@ -1,5 +1,5 @@
 import { isRecord, MAX_CONTEXT_POINTS, MAX_RESPONSE_BYTES, MAX_TEXT_POINTS, SpeechError } from '../shared/limits.ts';
-import { parseSession } from '../shared/session.ts';
+import { parseSession, SERVER_VAD_SILENCE_MS } from '../shared/session.ts';
 import type { SpeechSession } from '../shared/session.ts';
 import { abortable, pause } from './async.ts';
 import { Transcript } from './transcript.ts';
@@ -69,6 +69,11 @@ export async function transcribe(
           else fail('TRANSCRIPTION_FAILED', 'Azure 拒绝了连接或转写请求，请重试。');
         } else if (value.type === 'session.updated') {
           const input = isRecord(value.session) && isRecord(value.session.audio) ? value.session.audio.input : undefined;
+          if (!isRecord(input) || !isRecord(input.turn_detection)
+            || input.turn_detection.silence_duration_ms !== SERVER_VAD_SILENCE_MS) {
+            fail('VAD_CONFIG_FAILED', 'Azure 未确认 1000ms 句尾静音配置，已停止转写；可重试已保留的录音。');
+            return;
+          }
           if (!isRecord(input) || !isRecord(input.turn_detection) || input.turn_detection.type !== 'server_vad' || !isRecord(input.format)
             || input.format.type !== 'audio/pcm' || input.format.rate !== 24000
             || !isRecord(input.transcription) || input.transcription.model !== credential.deployment
@@ -99,7 +104,8 @@ export async function transcribe(
     setupTimer = setTimeout(() => fail('CONNECTION_TIMEOUT', '建立语音连接超时，可重试已保留的录音。'), 30_000);
     await abortable(opened, combined);
     socket.send(JSON.stringify({ type: 'session.update', session: { type: 'transcription', audio: { input: {
-      format: { type: 'audio/pcm', rate: 24000 }, transcription: { model: credential.deployment, prompt }, turn_detection: { type: 'server_vad' },
+      format: { type: 'audio/pcm', rate: 24000 }, transcription: { model: credential.deployment, prompt },
+      turn_detection: { type: 'server_vad', silence_duration_ms: SERVER_VAD_SILENCE_MS },
     } } } }));
     await abortable(configured, combined);
     clearTimeout(setupTimer);

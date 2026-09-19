@@ -1,5 +1,5 @@
 import { isRecord, MAX_RESPONSE_BYTES, SpeechError } from '../shared/limits.ts';
-import { parseSession } from '../shared/session.ts';
+import { parseSession, SERVER_VAD_SILENCE_MS } from '../shared/session.ts';
 import type { SpeechSession } from '../shared/session.ts';
 import type { AzureConfig } from './config.ts';
 
@@ -24,7 +24,7 @@ export function definition(deployment: string) {
         input: {
           format: { type: 'audio/pcm', rate: 24000 },
           transcription: { model: deployment, prompt: '' },
-          turn_detection: { type: 'server_vad' },
+          turn_detection: { type: 'server_vad', silence_duration_ms: SERVER_VAD_SILENCE_MS },
         },
       },
     },

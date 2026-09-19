@@ -31,7 +31,11 @@ destroys this recording, retained transcript and errors without deleting the
 existing draft. Late completions cannot restore cleared results.
 
 Azure server VAD detects speech and automatically commits turns while the
-browser continues recording and uploading the complete PCM stream. `gpt-transcribe`
+browser continues recording and uploading the complete PCM stream. Its end-of-turn
+silence duration is explicitly **1 second (1000 ms)**, confirmed by Azure's
+`session.updated` before audio is sent; missing/mismatched values fail visibly,
+never silently fall back. Threshold, prefix padding and other VAD options remain
+unset. This is not a proven fix for rate limiting (see #24). `gpt-transcribe`
 starts recognition after each turn is committed, not necessarily while a
 continuous sentence is still being spoken. Text deltas update the original
 selection as they arrive; each final transcript replaces that turn's provisional
@@ -101,7 +105,7 @@ Focused or nonempty inputs keep native editing. To paste into an empty unfocused
 input, tap first, then use native long-press paste. Keyboard Tab still focuses
 the real textarea; the gesture layer adds no tab stop. The independent microphone
 button remains the accessible alternative and retains its existing behavior.
-Speech 0.8.0 requires the paired host's `draftLifecycleVersion: 1` and
+Speech 0.8.1 requires the paired host's `draftLifecycleVersion: 1` and
 `draftSubmissionVersion: 1` capabilities
 as well as Cockpit's additive public UI classes. It uses the
 existing `composerEditor` middleware for the full-width status row and leaves
@@ -218,12 +222,14 @@ The browser starts capture while obtaining credentials and opening a WebSocket.
 A packaged AudioWorklet records mono PCM16 at 24 kHz into an append-only memory
 record (at most 120 seconds / 5.76 MB of raw audio). Each connection first sends
 `session.update`, including this recording's prompt or an explicit empty prompt,
-and `server_vad`, and checks the effective configuration in `session.updated`. Only then does it
+and `server_vad` with `silence_duration_ms: 1000`, and checks the effective
+configuration in `session.updated`. Only then does it
 send the backlog and new chunks with bounded WebSocket backpressure.
 
 Stop immediately releases the microphone, flushes the worklet's tail, sends all
 remaining chunks and sends one final commit. A following input-buffer clear
 acknowledgement drains ordered input operations, not the asynchronous transcriptions.
+F8/pointer release and button stop do not add a one-second client wait.
 The connection remains open until every committed item has a final result.
 An empty-buffer error is normal only when correlated to that final commit.
 No speech/empty final text leaves the original selection intact and displays a
@@ -351,8 +357,8 @@ pnpm typecheck
 pnpm test
 pnpm build
 # After committing clean source; use a new output directory.
-node scripts/package.mjs module-output-0.8.0
-node scripts/verify-package.mjs module-output-0.8.0/cockpit-speech-0.8.0.tgz
+node scripts/package.mjs module-output-0.8.1
+node scripts/verify-package.mjs module-output-0.8.1/cockpit-speech-0.8.1.tgz
 ```
 
 Archives contain runtime code, worklet assets, licenses and exact source/SDK

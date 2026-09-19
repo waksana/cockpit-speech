@@ -170,6 +170,7 @@ test('real recorder pipeline seals on navigation, writes a hidden draft and clos
   }
 });
 test('active hold submits only after the real VAD pipeline drains every committed result', async t => {
+  t.mock.timers.enable({ apis: ['setTimeout', 'Date'] });
   const f = fixture();
   let submissions = 0;
   let acknowledge!: (result: DraftSendResult) => void;
@@ -183,7 +184,7 @@ test('active hold submits only after the real VAD pipeline drains every committe
   } });
   t.after(() => s.service.dispose());
   const starting = s.service.start('hold'); f.grant(f.stream); await starting;
-  f.pcm(); await pump();
+  f.pcm(); await turn(); t.mock.timers.tick(25); await turn();
   const socket = f.sockets[0]!; socket.autoClear = false;
   socket.commit();
   socket.emit('conversation.item.input_audio_transcription.delta',
@@ -192,7 +193,10 @@ test('active hold submits only after the real VAD pipeline drains every committe
   assert.equal(submissions, 0);
   const released = s.service.releaseHold();
   s.service.clearTarget(s.draft.id);
-  await pump();
+  await turn(); t.mock.timers.tick(25); await turn();
+  assert.deepEqual(socket.sent.slice(-2).map(value => value.type),
+    ['input_audio_buffer.commit', 'input_audio_buffer.clear'], 'release drains without waiting for 1000ms of silence');
+  assert.equal(socket.sent.filter(value => value.type === 'input_audio_buffer.commit').length, 1);
   socket.emit('error', { error: { code: 'input_audio_buffer_commit_empty', event_id: 'speech-final-commit' } });
   socket.emit('input_audio_buffer.cleared'); await turn();
   assert.equal(submissions, 0, 'input drain is not the final transcript acknowledgement');
@@ -304,7 +308,7 @@ test('gesture starts microphone independently of unresolved credentials; stopped
   assert.equal(socket.closed, 1);
   recording.cancel();
 });
-test('prompt is confirmed before audio, including explicit empty context on cached credentials', async () => {
+test('1000ms server VAD and prompt are confirmed before audio, including empty context on cached credentials', async () => {
   const f = fixture();
   const original = f.env.openSocket;
   f.env.openSocket = url => { const socket = original(url); f.sockets.at(-1)!.autoConfig = false; return socket; };
@@ -314,11 +318,73 @@ test('prompt is confirmed before audio, including explicit empty context on cach
   assert.deepEqual(socket.sent.map(m => m.type), ['session.update']);
   const session = socket.sent[0]!.session;
   assert.match(JSON.stringify(session), /"prompt":""/);
+  assert.deepEqual(JSON.parse(JSON.stringify(session)).audio.input.turn_detection,
+    { type: 'server_vad', silence_duration_ms: 1000 }, 'no threshold, prefix or other VAD override');
   socket.emit('session.updated', { session });
   const stop = recording.stop(); await pump();
   socket.commit(); socket.final(); await stop; recording.cancel();
   for (const text of ['a'.repeat(1000), '😀'.repeat(1000)]) assert.equal([...transcriptionPrompt(text)].length, 1022);
   assert.throws(() => transcriptionPrompt('a'.repeat(1001)));
+});
+test('missing, mismatched or nonnumeric VAD confirmations fail before audio without falling back', async t => {
+  for (const vad of [undefined, null, { type: 'server_vad' },
+    ...[500, 1500, '1000', null, 1000.5].map(silence_duration_ms => ({ type: 'server_vad', silence_duration_ms }))]) {
+    await t.test(JSON.stringify(vad) ?? 'missing turn_detection', async t => {
+      const f = fixture();
+      const original = f.env.openSocket;
+      f.env.openSocket = url => { const socket = original(url); f.sockets.at(-1)!.autoConfig = false; return socket; };
+      const recording = await f.start();
+      t.after(() => recording.cancel());
+      f.pcm(); await turn();
+      const socket = f.sockets[0]!;
+      const session = JSON.parse(JSON.stringify(socket.sent[0]!.session));
+      session.audio.input.turn_detection = vad;
+      socket.emit('session.updated', { session });
+      await assert.rejects(recording.stop(), { code: 'VAD_CONFIG_FAILED', message: /1000ms/ });
+      assert.deepEqual(socket.sent.map(value => value.type), ['session.update']);
+      assert.equal(socket.closed, 1);
+      assert.equal(recording.retryable(), true);
+    });
+  }
+});
+test('Azure rejection or absent configuration acknowledgement never releases buffered audio', async t => {
+  t.mock.timers.enable({ apis: ['setTimeout'] });
+  for (const rejected of [true, false]) {
+    const f = fixture();
+    const original = f.env.openSocket;
+    f.env.openSocket = url => { const socket = original(url); f.sockets.at(-1)!.autoConfig = false; return socket; };
+    const recording = await f.start();
+    t.after(() => recording.cancel());
+    f.pcm(); await turn();
+    const socket = f.sockets[0]!;
+    const stopped = recording.stop();
+    const outcome = assert.rejects(stopped, { code: rejected ? 'TRANSCRIPTION_FAILED' : 'CONNECTION_TIMEOUT' });
+    await turn();
+    if (rejected) socket.emit('error', { error: { code: 'invalid_request_error', message: 'PRIVATE-PROVIDER-DETAIL' } });
+    else t.mock.timers.tick(30_001);
+    await outcome;
+    assert.deepEqual(socket.sent.map(value => value.type), ['session.update']);
+    assert.equal(socket.closed, 1);
+    assert.equal(recording.retryable(), true);
+  }
+});
+test('effective threshold/prefix are not overridden and a later silence mismatch closes the connection', async t => {
+  const f = fixture();
+  const recording = await f.start();
+  t.after(() => recording.cancel());
+  f.pcm(); await pump();
+  const socket = f.sockets[0]!;
+  const session = JSON.parse(JSON.stringify(socket.sent[0]!.session));
+  Object.assign(session.audio.input.turn_detection, { threshold: 0.7, prefix_padding_ms: 250 });
+  socket.emit('session.updated', { session });
+  await turn();
+  assert.equal(socket.closed, 0);
+  session.audio.input.turn_detection.silence_duration_ms = 500;
+  socket.emit('session.updated', { session });
+  await assert.rejects(recording.stop(), { code: 'VAD_CONFIG_FAILED' });
+  assert.equal(socket.closed, 1);
+  assert.equal(socket.sent.filter(value => value.type === 'session.update').length, 1);
+  assert.equal(socket.sent.some(value => value.type === 'input_audio_buffer.commit'), false);
 });
 test('VAD streams every available item in order while recording and drains after final empty commit', async () => {
   const f = fixture(); const texts: string[] = [];
@@ -459,17 +525,18 @@ test('failed send closes its connection; manual retry replays the identical reta
   assert.equal(await retried, 'fresh');
   assert.equal(f.values().captures, 1); recording.cancel(); assert.equal(recording.retryable(), false);
 });
-test('stop flushes tail samples before its single commit; intentional stop does not report audio errors', async () => {
+test('stop flushes tail before one commit and clear without a 1000ms client delay or audio errors', async t => {
+  t.mock.timers.enable({ apis: ['setTimeout'] });
   const f = fixture(); const recording = await f.start(); f.pcm(1);
   f.worklet.port.postMessage = () => queueMicrotask(() => {
     f.pcm(2); f.worklet.port.onmessage?.({ data: { type: 'ended', limited: false } });
   });
   const stop = recording.stop();
   assert.equal(stop, recording.stop());
-  await pump();
+  await turn(); t.mock.timers.tick(25); await turn();
   const socket = f.sockets[0]!;
-  assert.equal(socket.sent.filter(m => m.type === 'input_audio_buffer.append').length, 2);
-  assert.equal(socket.sent.filter(m => m.type === 'input_audio_buffer.commit').length, 1);
+  assert.deepEqual(socket.sent.map(m => m.type), ['session.update', 'input_audio_buffer.append',
+    'input_audio_buffer.append', 'input_audio_buffer.commit', 'input_audio_buffer.clear']);
   assert.deepEqual(f.errors, []); socket.commit(); socket.final(); await stop; recording.cancel();
 });
 test('late audio-context cleanup failure cannot abort a newer replay attempt', async () => {

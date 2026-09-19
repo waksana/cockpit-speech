@@ -11,6 +11,7 @@ session quota. `config.ts` rereads bounded regular non-symlink
 
 `azure.ts` requests `/openai/v1/realtime/client_secrets` with the server-held key,
 transcription-only configuration, PCM 24 kHz, empty prompt, `server_vad`
+with `silence_duration_ms: 1000` (the same shared value as the browser update)
 and a 600-second credential lifetime. Provider requests reject redirects,
 have a 30-second deadline, bound response bodies and discard private errors.
 The returned WebSocket origin/path is locally constructed and strictly validated.
@@ -52,7 +53,11 @@ The returned WebSocket origin/path is locally constructed and strictly validated
   then seals the append-only record. A missing flush acknowledgement fails rather
   than claiming complete audio.
 - `socket.ts` sends prompt and server-VAD configuration and verifies
-  `session.updated` before sending audio. No context means `prompt: ""`, never
+  `session.updated`, including a numeric `silence_duration_ms` exactly equal to
+  1000, before sending audio. Missing/mismatched silence settings explicitly fail
+  with `VAD_CONFIG_FAILED`; provider rejection and absent acknowledgement retain
+  their existing error/timeout paths. Later configuration mismatches also fail.
+  No context means `prompt: ""`, never
   omission. The same ordered cursor drains backlog and newly added chunks;
   no local silence filtering or cropping occurs. Stop sends final commit then
   input-buffer clear on the same ordered socket. `input_audio_buffer.cleared`
@@ -60,6 +65,8 @@ The returned WebSocket origin/path is locally constructed and strictly validated
   final-commit empty error means no new item; all existing items must still finish.
   Missing acknowledgements/results time out; rate limits and other errors remain
   failures. No sleep-based "probably finished" heuristic is used.
+  The server's one-second silence setting is not a client stop/send delay:
+  F8/pointer release still flushes the tail and commits/clears immediately.
 - `transcript.ts` owns one bounded item table per connection. Commit links define
   ordering, delta appends to that item's text, and completed replaces its text.
   Every available item's text participates in the composed snapshot even when
@@ -193,6 +200,22 @@ even after capture has stopped, without undoing already-written draft text. The
 microphone button's limit policy is unchanged.
 
 ## Existing validation tools
+
+For #25, the [Azure Realtime reference](https://learn.microsoft.com/en-us/azure/foundry/openai/realtime-audio-reference)
+delegates the protocol to OpenAI. Its
+[transcription client-secret schema](https://developers.openai.com/api/reference/resources/realtime/subresources/client_secrets)
+defines `session.audio.input.turn_detection.silence_duration_ms` as a numeric
+duration in milliseconds for `server_vad`; the
+[Azure guide](https://learn.microsoft.com/en-us/azure/foundry/openai/how-to/realtime-audio)
+also shows this field and `session.updated` confirmation. The referenced schemas
+do not publish a numeric minimum/maximum for this field: no deployment-specific
+accepted range or acceptance of 1000ms has been established by a cloud probe here.
+OpenAI's documented 500ms default is not a readback of this Azure deployment's
+previous effective value. Runtime confirmation is mandatory; do not infer
+Azure acceptance from synthetic echo responses, or borrow Voice Live bounds.
+Only silence duration is overridden; threshold/prefix and quotas are unchanged.
+No actual cloud audio/paid experiment was run, and #24's VAD/429 causality remains
+unproven and separate.
 
 `pnpm test` uses Node's built-in runner and TypeScript stripping. Tests use
 synthetic permission, Web Audio, worklet messages, sockets and backend responses,
