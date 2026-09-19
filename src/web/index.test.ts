@@ -50,7 +50,7 @@ test('input middleware preserves native textarea props and keeps decision microp
   const context = {
     apiVersion: 2, uiVersion: 1, chatWindowVersion: 1, composerInputVersion: 1,
     signal: new AbortController().signal, request: async () => { throw new Error('No HTTP from render'); }, report() {},
-    createPortal: () => assert.fail('recording feedback must stay in the microphone button'),
+    createPortal: () => assert.fail('recording feedback must stay in normal component flow'),
     react: {
       Fragment: 'fragment',
       createElement: (type: unknown, props: Record<string, unknown> | null, ...children: unknown[]): Element => ({ type, props: props ?? {}, children }),
@@ -171,22 +171,22 @@ test('input middleware preserves native textarea props and keeps decision microp
         assert.equal(button.props['aria-pressed'], current === 'recording');
         assert.notEqual(button.props['aria-label'], '取消语音输入');
         const icon = button.children[0] as Element;
-        assert.equal(icon.type === 'span', busy || current === 'recording');
+        assert.equal(icon.type === 'span', busy);
         if (busy) {
           assert.equal(icon.props.className, 'cockpit-speech-spinner');
           (button.props.onClick as () => void)();
           assert.equal(service.getSnapshot().phase, 'idle', 'busy clicks neither cancel nor start');
         }
-        assert.equal(rendered.children.length, 2, 'all phases stay in the button');
+        assert.equal(rendered.children.length, 2, 'input wrapper does not insert status inside the editing row');
         if (current === 'recording') {
-          assert.equal(icon.props.className, 'cockpit-speech-dot');
-          assert.deepEqual(icon.props.style, { transform: 'scale(1)' });
+          assert.equal(icon.props.name, 'stop');
+          assert.equal(icon.props.className, 'ck-icon-md cockpit-speech-stop');
           for (const held of [true, false]) {
             holding = held; level = 1;
             const loud = Wrapped({ draft, operation, disabled: false, sendBlocked: false, value: '', onSubmit: nativeSubmit, onChange: nativeTextChange });
-            const dot = (loud.children[1] as Element).children[0] as Element;
-            assert.equal(dot.props.className, 'cockpit-speech-dot');
-            assert.deepEqual(dot.props.style, { transform: 'scale(2)' }, 'hold and button recordings share the same bounded dot');
+            const stop = (loud.children[1] as Element).children[0] as Element;
+            assert.equal(stop.props.name, 'stop');
+            assert.equal(stop.props.style, undefined, 'volume never scales the stop control');
             cleanupEffects();
           }
           level = 0;
@@ -212,5 +212,31 @@ test('input middleware preserves native textarea props and keeps decision microp
     }
     phase = 'idle'; error = 'Synthetic device disconnected';
     assert.equal(Panel(), null, 'errors never create a notification bar');
+    const status = frontend.components![2]!;
+    assert.equal(status.boundary, 'composerEditor');
+    if (status.boundary !== 'composerEditor') assert.fail('wrong status boundary');
+    const StatusEditor = status.wrap(Base) as unknown as (value: typeof props) => Element;
+    const statusTree = StatusEditor(props);
+    assert.equal(statusTree.props.className, 'cockpit-speech-editor');
+    assert.equal((statusTree.children[1] as Element).type, Base);
+    const Status = (statusTree.children[0] as Element).type as () => Element | null;
+    assert.equal(Status(), null);
+    for (const current of ['permission', 'recording', 'stopping', 'transcribing', 'retry'] as const) {
+      phase = current;
+      const row = Status()!;
+      assert.match(String(row.props.className), /ck-input-status ck-status-text/);
+      const marker = row.children[0] as Element;
+      const symbol = marker.children[0] as Element;
+      const pending = ['permission', 'stopping', 'transcribing'].includes(current);
+      assert.equal(symbol.props.className, pending ? 'cockpit-speech-spinner cockpit-speech-status-spinner'
+        : current === 'recording' ? 'cockpit-speech-level' : 'cockpit-speech-status-icon');
+      assert.equal(!!row.children[2], current === 'recording', 'time is only shown during recording');
+      assert.equal(!!row.children[3], current !== 'recording', 'pending/error states can be cleared');
+      assert.equal(row.children.length, 4, 'retry stays in the microphone button');
+      if (current === 'retry') {
+        ((row.children[3] as Element).props.onClick as () => void)();
+        assert.equal(service.getSnapshot().phase, 'idle');
+      }
+    }
   } finally { cleanupEffects(); for (const dispose of disposers) dispose(); }
 });

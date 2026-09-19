@@ -12,35 +12,39 @@ The fixed circular microphone follows the actual editor and precedes native
 send, for prompt, ask and plan inputs. File stays on the left and prompt-only.
 Native free-text restrictions leave the microphone visible but disabled.
 
-**Microphone -> disabled spinner (starting microphone) -> red volume dot
-(local recording) -> disabled spinner (sending/transcribing) -> microphone.**
-Wait for the red dot before speaking. Permission and device startup still take
-time, but credentials and networking no longer delay local recording. There is
-no timer, adjacent phase text, or success/error notification panel.
+**Microphone -> disabled spinner -> solid red stop square -> disabled spinner
+-> microphone.** A fixed-height status row above the complete editor shows
+preparation spinner/text, then a volume-reactive red dot, recording text and
+sample-based elapsed time, then processing spinner/text. Only actual capture
+uses the red dot. Wait for it before speaking. No microphone stays open between
+recordings to suppress browser permission prompts.
 
 Failure changes that same button to a red retry icon with an accessible error
 description and tooltip. Click to replay the retained recording; it does not
 open the microphone again. A failed microphone startup or recording shorter
 than 100 ms has no replayable audio, so retry starts a new capture instead.
-There is no automatic retry or busy-click cancellation.
+There is no automatic retry. The status row displays safe errors; retry remains
+in the microphone button. Its right-hand clear icon cancels pending work and
+destroys this recording, retained transcript and errors without deleting the
+existing draft. Late completions cannot restore cleared results.
 
 `gpt-transcribe` recognizes the committed audio turn, not live captions or a
 duplex conversation. Successful text is inserted at the original selection,
 never sent automatically. If the draft changed, its text is not overwritten:
 the separate result recovery field offers copy, explicit insertion at the
-current caret, or discard. Only this conflict recovery can add a panel.
+current caret, or discard. Only this conflict recovery adds a result panel.
 
 ## Hold to talk on an empty input
 
 An empty, unfocused, writable input displays a non-editing gesture layer:
 **轻点输入，按住说话**. A short tap focuses the real textarea for typing or
-native selection/paste. Holding for 300 ms starts the existing microphone button's
-spinner. Once ready, a red dot inside that button changes size with actual
-captured volume, always within the fixed button bounds. Release to transcribe
-into the original draft, never send a message; the same button spins while
-waiting for the result. Release before readiness cancels instead. Clicking the
-microphone uses the identical spinner/red-dot feedback; clicking the dot stops.
-There is no full-screen shade, separate loading indicator or status panel.
+native selection/paste. Pressing immediately shows preparation feedback, but
+microphone acquisition still starts only after 300 ms. Once ready, the status
+row's red dot changes size with captured volume; the button is a static red stop
+square. Release to transcribe into the original draft, never send a message.
+Release before readiness cancels instead. Clicking the microphone uses the
+same status row and clicking the stop square ends capture.
+There is no full-screen shade or parallel editor.
 
 Swipe upward 64 CSS pixels from the initial press to cancel immediately, even
 during startup. Moving back never resumes that press, and release afterward
@@ -59,13 +63,20 @@ Focused or nonempty inputs keep native editing. To paste into an empty unfocused
 input, tap first, then use native long-press paste. Keyboard Tab still focuses
 the real textarea; the gesture layer adds no tab stop. The independent microphone
 button remains the accessible alternative and retains its existing behavior.
-No host API, SDK pin or backend protocol change is required.
+Speech 0.3.1 requires Cockpit 0.2.6's additive public UI classes. It uses the
+existing `composerEditor` middleware for the full-width status row and leaves
+queue/question layout and scrolling entirely to the host. Input hint size,
+status typography, spacing and alignment are public host classes, not private
+host selectors or separately exported font variables. The backend is unchanged.
 
 The layer suppresses selection and touch callouts rather than intercepting a
 long press on an editable textarea. This is not a claim of iOS Safari/PWA
 hardware compatibility: microphone permission, transient activation and OS
 gesture behavior still require real-device verification. If microphone startup
 cannot complete while held, release safely and use the microphone button.
+In particular, iOS home-screen web apps may ask for microphone permission again.
+The browser owns permission persistence; the module cannot promise permanent
+authorization and deliberately releases the microphone after stop/cancel.
 
 ## File-only configuration
 

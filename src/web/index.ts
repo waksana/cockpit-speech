@@ -31,11 +31,39 @@ export const activate: ActivateFrontend = context => {
     }),
     dispose: service => service.dispose(),
   }).get();
-  function Icon({ name }: { name: keyof typeof icons }) {
-    return h('svg', { className: 'ck-icon', width: 24, height: 24, viewBox: '0 0 24 24', fill: 'none',
+  function Icon({ name, className = '' }: { name: keyof typeof icons; className?: string }) {
+    return h('svg', { className: `ck-icon ${className}`, width: 24, height: 24, viewBox: '0 0 24 24', fill: 'none',
       stroke: 'currentColor', strokeWidth: 2, strokeLinecap: 'round', strokeLinejoin: 'round',
       'aria-hidden': true, focusable: false,
     }, ...icons[name].map(([tag, attrs], key) => h(tag, { ...attrs, key })));
+  }
+  function SpeechStatus() {
+    const state = React.useSyncExternalStore(speech.subscribe, speech.getSnapshot);
+    React.useSyncExternalStore(context.state.host.subscribe, context.state.host.getSnapshot);
+    const preparing = state.phase === 'permission' || (state.phase === 'idle' && state.pressing);
+    if (state.phase === 'idle' && !state.recovery && !preparing) return null;
+    const recording = state.phase === 'recording';
+    const capturing = recording && !state.holdingAtLimit;
+    const processing = state.phase === 'stopping' || state.phase === 'transcribing';
+    const retry = state.phase === 'retry';
+    const label = retry ? `${state.error ?? '语音失败。'}${speech.hasRetainedRecording() ? '录音已保留，点击话筒重试。' : '请点击话筒重新录音。'}`
+      : preparing ? '正在准备录音…'
+        : state.recovery ? '识别结果未写入草稿，请在下方恢复。'
+          : recording ? (state.holdingAtLimit ? '已达两分钟，松手转写' : '正在录音')
+            : '正在处理录音…';
+    const time = `${String(Math.floor(state.elapsedSeconds / 60)).padStart(2, '0')}:${String(state.elapsedSeconds % 60).padStart(2, '0')}`;
+    return h('div', { className: `ck-input-status ck-status-text cockpit-speech-status ${capturing || retry ? 'ck-danger' : 'ck-text-secondary'}` },
+      h('span', { className: 'ck-status-marker', 'aria-hidden': true },
+        preparing || processing ? h('span', { className: 'cockpit-speech-spinner cockpit-speech-status-spinner' })
+          : capturing ? h('span', { className: 'cockpit-speech-level',
+            style: { transform: `scale(${1 + Math.min(1, state.level * 6)})` } })
+            : h(Icon, { name: state.holdingAtLimit ? 'pause' : 'error', className: 'cockpit-speech-status-icon' })),
+      h('span', { className: 'ck-status-label', role: 'status', title: label }, label),
+      recording ? h('span', { className: 'cockpit-speech-time', 'aria-label': `录音时长 ${state.elapsedSeconds} 秒` }, time) : null,
+      !recording && !(state.phase === 'idle' && state.pressing) ? h('button', {
+        type: 'button', className: 'ck-icon-button ck-status-action', 'aria-label': '清除本次语音',
+        title: '清除本次录音、识别结果和错误，保留已有草稿', onClick: () => speech.clear(),
+      }, h(Icon, { name: 'close', className: 'ck-icon-sm' })) : null);
   }
   function SpeechPanel() {
     const state = React.useSyncExternalStore(speech.subscribe, speech.getSnapshot);
@@ -85,6 +113,10 @@ export const activate: ActivateFrontend = context => {
           focus: () => input.current?.focus(),
         }), [draft]);
         const holding = React.useSyncExternalStore(gesture.subscribe, gesture.getSnapshot);
+        React.useLayoutEffect(() => {
+          speech.setPressing(draft.id, holding);
+          return () => speech.setPressing(draft.id, false);
+        }, [draft.id, holding]);
         React.useLayoutEffect(() => {
           const cancel = gesture.cancel;
           const visibility = () => { if (document.visibilityState !== 'visible') cancel(); };
@@ -142,10 +174,8 @@ export const activate: ActivateFrontend = context => {
             else if (!busy) void speech.start();
           },
         }, busy ? h('span', { className: 'cockpit-speech-spinner', 'aria-hidden': true })
-          : state.phase === 'recording' ? h('span', {
-            className: 'cockpit-speech-dot', 'aria-hidden': true,
-            style: { transform: `scale(${1 + Math.min(1, state.level * 6)})` },
-          }) : h(Icon, { name: retry ? 'retry' : 'mic' }));
+          : state.phase === 'recording' ? h(Icon, { name: 'stop', className: 'ck-icon-md cockpit-speech-stop' })
+            : h(Icon, { name: retry ? 'retry' : 'mic' }));
         const showGesture = holding || (!focused && props.value === '' && snapshot.text === ''
           && !props.disabled && !props.sendBlocked && speech.canStart());
         return h(React.Fragment, null,
@@ -156,7 +186,7 @@ export const activate: ActivateFrontend = context => {
               onBlur: event => { setFocused(false); props.onBlur?.(event); },
             }),
             showGesture ? h('div', {
-              className: 'cockpit-speech-hold', 'aria-hidden': true,
+              className: 'cockpit-speech-hold ck-input-hint', 'aria-hidden': true,
               onPointerDown: event => { if (gesture.down(event, event.currentTarget)) event.preventDefault(); },
               onPointerMove: event => {
                 for (const point of event.nativeEvent.getCoalescedEvents?.() ?? []) gesture.move(point);
@@ -177,6 +207,12 @@ export const activate: ActivateFrontend = context => {
       wrap: Base => function SpeechComposer(props) {
         React.useSyncExternalStore(props.draft.subscribe, props.draft.getSnapshot);
         return h(React.Fragment, null, h(Base, props), h(SpeechPanel));
+      },
+    }, {
+      id: 'speech-status', boundary: 'composerEditor',
+      wrap: Base => function SpeechEditor(props) {
+        React.useSyncExternalStore(props.draft.subscribe, props.draft.getSnapshot);
+        return h('div', { className: 'cockpit-speech-editor' }, h(SpeechStatus), h(Base, props));
       },
     }],
   };

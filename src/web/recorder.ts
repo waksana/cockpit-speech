@@ -12,7 +12,7 @@ export interface Recording {
   cancel(): void;
 }
 export interface RecordingPreparation {
-  start(session: CreateSession, context?: string, options?: { waitForStop: boolean; onLevel?(value: number): void }): Promise<Recording>;
+  start(session: CreateSession, context?: string, options?: { waitForStop: boolean; onLevel?(value: number, seconds: number): void }): Promise<Recording>;
   cancel(): void;
 }
 export type PrepareRecording = (signal: AbortSignal, fail: (error: SpeechError) => void, limit: () => void) => RecordingPreparation;
@@ -28,7 +28,7 @@ export function prepareRecording(
   let attempt: AbortController | undefined;
   let captureActive = true;
   let waitForStop = false;
-  let onLevel: ((value: number) => void) | undefined;
+  let onLevel: ((value: number, seconds: number) => void) | undefined;
   const audio = new AudioCapture(combined, error => {
     // A late capture cleanup callback must not fail a newer replay connection.
     if (!captureActive || combined.aborted) return;
@@ -40,7 +40,7 @@ export function prepareRecording(
     void audio.stop().then(limit, error => {
       if (!combined.aborted) fail(error instanceof SpeechError ? error : new SpeechError('AUDIO_FAILED', '停止本地录音失败。'));
     });
-  }, env, value => onLevel?.(value));
+  }, env, (value, seconds) => onLevel?.(value, seconds));
   let started = false;
   const cancel = () => { captureActive = false; lifetime.abort(abortError()); attempt?.abort(abortError()); audio.cancel(); };
   return {

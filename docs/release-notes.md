@@ -1,3 +1,29 @@
+# Cockpit Speech 0.3.1
+
+Requires paired Cockpit 0.2.6 public input/status classes; the exact clean,
+reachable SDK pin is recorded in `tooling/host-sdk.json`. Existing backend,
+Azure configuration, audio transport and explicit submission behavior remain.
+
+- Normal-flow status before the complete input row, using host-owned hint and
+  auxiliary typography, fixed height, marker alignment and clear-button layout.
+  No private host CSS, ancestor edits, new slot or queue/question layout changes.
+- Immediate preparation feedback on an accepted press without opening audio
+  before the existing 300ms threshold. Actual recording alone has a reactive
+  red dot and PCM-derived time; the microphone button uses a solid red square.
+  Preparation/processing use loading icons and accurate text. Held 120-second
+  capture limits and errors use static indicators rather than false activity.
+- Error text is visible in the same row. The microphone remains the sole retry
+  control. Clear destroys the current recording/recovery/errors and cancels
+  pending work, including late completions, without deleting existing drafts.
+- The input hint follows the host's user-selected input size. Browser permission
+  persistence, particularly iOS home-screen apps, is not controlled by this UI;
+  stop/cancel still releases capture rather than retaining an idle microphone.
+
+No tag or Release is created by the source change. Deployment requires explicit
+operator authorization separately from merging.
+
+---
+
 # Cockpit Speech 0.3.0
 
 Adds empty-input hold-to-talk for waksana/cockpit-speech#5. No deployment,

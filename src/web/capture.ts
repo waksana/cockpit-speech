@@ -38,13 +38,13 @@ export class AudioCapture {
   private readonly fail: (error: SpeechError) => void;
   private readonly limit: () => void;
   private readonly env: CaptureEnvironment;
-  private readonly level: (value: number) => void;
+  private readonly level: (value: number, seconds: number) => void;
   constructor(
     signal: AbortSignal,
     fail: (error: SpeechError) => void,
     limit: () => void,
     env = browserCapture(),
-    level: (value: number) => void = () => {},
+    level: (value: number, seconds: number) => void = () => {},
   ) {
     this.fail = fail; this.limit = limit; this.env = env; this.level = level;
     signal.throwIfAborted();
@@ -92,7 +92,7 @@ export class AudioCapture {
           && data.buffer.byteLength > 0 && data.buffer.byteLength <= PCM_CHUNK * 2
           && data.buffer.byteLength % 2 === 0 && this.bytes + data.buffer.byteLength <= PCM_LIMIT * 2) {
           this.chunks.push(new Uint8Array(data.buffer)); this.bytes += data.buffer.byteLength;
-          this.level(pcmLevel(data.buffer));
+          this.level(pcmLevel(data.buffer), this.bytes / 48000);
         } else if (isRecord(data) && data.type === 'ended' && typeof data.limited === 'boolean') {
           this.sealed = true; this.cleanup(); this.resolveStop?.();
           if (data.limited) this.limit();
