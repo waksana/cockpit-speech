@@ -133,6 +133,24 @@ test('input middleware preserves native textarea props and keeps decision microp
       if (layer) {
         assert.equal(layer.props['aria-hidden'], true);
         assert.equal(layer.props.tabIndex, undefined, 'keyboard focus stays on the real textarea');
+        let nativeFocus = 0;
+        const editor = { ownerDocument: { activeElement: null },
+          getBoundingClientRect: () => ({ left: 0, right: 100, top: 0, bottom: 50 }),
+          focus: () => { nativeFocus++; } };
+        const emptyBase = (empty.children[0] as Element).children[0] as Element;
+        (emptyBase.props.editorRef as (node: typeof editor) => void)(editor);
+        let captured = false;
+        const event = { pointerId: 1, clientX: 20, clientY: 20, button: 0, isPrimary: true,
+          currentTarget: { setPointerCapture: () => { captured = true; }, hasPointerCapture: () => captured,
+            releasePointerCapture: () => { captured = false; } },
+          preventDefault() {} };
+        (layer.props.onPointerDown as (value: typeof event) => void)(event);
+        (layer.props.onPointerUp as (value: typeof event) => void)(event);
+        assert.equal(nativeFocus, 0, 'pointerup must leave the touch target mounted');
+        (layer.props.onClick as (value: typeof event) => void)(event);
+        assert.equal(nativeFocus, 1, 'the completed click focuses the original editor synchronously');
+        (layer.props.onClick as (value: typeof event) => void)(event);
+        assert.equal(nativeFocus, 1, 'the tap is consumed exactly once');
       }
       cleanupEffects();
       focused = true;

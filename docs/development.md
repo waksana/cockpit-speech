@@ -30,6 +30,10 @@ The returned WebSocket origin/path is locally constructed and strictly validated
   the new call re-evaluates that condition. It does not acquire a second stream,
   loop, revive a cancelled capture, or mark the editor ready before the graph is
   actually running. The existing bounded startup timeout still applies.
+- A short input-layer release records tap intent; its synchronous click handler
+  focuses the real textarea. Focusing during pointerup removes the gesture layer
+  before touchend/click and can disrupt mobile gesture completion. Cancelled,
+  held, superseded and newly blocked taps cannot focus from a trailing click.
 - `capture-worklet.ts` and `pcm.ts` produce 24 kHz mono little-endian PCM16 chunks.
   Native Web Audio resamples the requested 24 kHz context; the streaming encoder
   also handles other context sample rates. Render-sample counting bounds the

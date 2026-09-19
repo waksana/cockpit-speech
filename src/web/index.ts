@@ -166,7 +166,8 @@ export const activate: ActivateFrontend = context => {
               onPointerCancel: event => { gesture.lost(event.pointerId); },
               onLostPointerCapture: event => { gesture.lost(event.pointerId); },
               onContextMenu: event => event.preventDefault(),
-              onClick: event => event.preventDefault(),
+              // Keep the touch target mounted through release; focus in the completed click gesture.
+              onClick: event => { event.preventDefault(); gesture.click(); },
             }, '轻点输入，按住说话') : null,
           ), button,
         );
