@@ -90,15 +90,15 @@ export const activate: ActivateFrontend = context => {
           const visibility = () => { if (document.visibilityState !== 'visible') cancel(); };
           window.addEventListener('blur', cancel);
           window.addEventListener('pagehide', cancel);
-          window.addEventListener('resize', cancel);
-          window.addEventListener('scroll', cancel, { capture: true });
+          window.addEventListener('resize', gesture.checkBounds);
+          window.addEventListener('scroll', gesture.checkBounds, { capture: true });
           document.addEventListener('visibilitychange', visibility);
           return () => {
             cancel();
             window.removeEventListener('blur', cancel);
             window.removeEventListener('pagehide', cancel);
-            window.removeEventListener('resize', cancel);
-            window.removeEventListener('scroll', cancel, { capture: true });
+            window.removeEventListener('resize', gesture.checkBounds);
+            window.removeEventListener('scroll', gesture.checkBounds, { capture: true });
             document.removeEventListener('visibilitychange', visibility);
           };
         }, [gesture]);

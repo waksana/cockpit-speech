@@ -73,7 +73,9 @@ not private DOM queries. Captured/coalesced coordinates are checked on move and
 release: once outside, ownership and timer are cleared before capture release,
 then the existing speech cancellation destroys the recording. Release while
 starting cancels; only release during recording stops/transcribes. Unmount,
-draft/host invalidation, visibility loss, window blur, resize and scroll cancel.
+draft/host invalidation, visibility loss and window blur cancel. Resize/scroll
+recheck the held coordinates against the current bounds; unrelated conversation
+scrolling must not interrupt a hold.
 The independent microphone button and post-stop retry/recovery paths are unchanged.
 
 Hold starts pass `waitForStop` to the recording preparation. At the render or wall
