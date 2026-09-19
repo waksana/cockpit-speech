@@ -17,6 +17,17 @@ The returned WebSocket origin/path is locally constructed and strictly validated
 
 ## Capture and network are independent
 
+- `context.ts` preserves the ordinary prompt/plan chat-window policy. For an
+  ask draft, `speech.ts` reads only `snapshot.askContext` from its exact host-bound
+  draft at capture start, before any asynchronous setup. The optional typed host
+  field contains only that occurrence's question and choices, not arbitrary
+  session data. Missing/blank question means no reference plus a visible
+  audio-only notice, never a chat-window fallback. The question prefix and head
+  are allocated first from 1,000 Unicode code points, then nonblank choices in
+  native order with complete labels and at least one point of text. The last
+  fitting choice may be truncated; no local model, history fetch or DOM/tool
+  text parsing is involved. Recorder replay reuses the same captured string;
+  retirement and request-ID reuse retain the existing draft lifetime guards.
 - `transport.ts` caches credentials in activation-scoped memory for at most
   one minute and stops reusing them 30 seconds before Azure expiry. Retry requests
   fresh credentials, also picking up changed file configuration. Aborted requests

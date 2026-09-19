@@ -1,4 +1,4 @@
-# Cockpit Speech 0.6.0
+# Cockpit Speech 0.7.0
 
 Active hold-release submission for #16, building on #11 and the native captured
 draft submission contract in waksana/cockpit#59. The precise SDK pin is in
@@ -19,6 +19,22 @@ draft submission contract in waksana/cockpit#59. The precise SDK pin is in
   there is no blind resend, and clearing local audio cannot retract a message.
 
 No deployment/restart or Windows/iOS real-device verification is performed.
+---
+
+# Cockpit Speech 0.6.0
+
+For #17, paired with waksana/cockpit#61 and its exact SDK SHA in
+`tooling/host-sdk.json`, ask-answer recordings use the question and ordered choices from the
+public host draft context, captured once at recording start. Ordinary prompt
+and plan context selection is unchanged. Reference text remains bounded to
+1,000 Unicode code points including labels, with question-first allocation and
+ordered choice truncation. Missing question context is explicitly shown as an
+audio-only fallback, never replaced with unrelated chat text.
+
+Session switches, question updates and retained-audio retries cannot replace
+the captured reference. Request retirement and reused request IDs keep their
+existing exact-draft ownership. No VAD/protocol or submission-policy changes.
+Synthetic context/transport coverage does not establish device recognition quality.
 
 ---
 

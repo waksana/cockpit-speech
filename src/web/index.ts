@@ -55,13 +55,15 @@ export const activate: ActivateFrontend = context => {
     const retryHint = speech.hasRetainedRecording(id)
       ? (speech.canRetry(id) ? '录音已保留，点击话筒重试。' : '录音已保留，当前无法重试，可清除后重新录音。')
       : '请点击话筒重新录音。';
-    const label = sendError ? state.error!
+    const status = sendError ? state.error!
       : state.phase === 'sending' ? '正在提交原输入框的消息…'
       : retry ? `${state.error ?? '语音失败。'}${retryHint}${state.sendRequested ? '转写成功后仍会尝试原输入框的发送。' : ''}`
       : preparing ? '正在准备录音…'
         : state.recovery ? '识别结果未写入草稿，请在下方恢复。'
           : recording ? (state.holdingAtLimit ? '已达两分钟，松手发送' : '正在录音')
-            : state.notice ?? (state.sendRequested ? '正在处理录音，完成后发送原输入框…' : '正在处理录音…');
+            : processing ? (state.sendRequested ? '正在处理录音，完成后发送原输入框…' : '正在处理录音…')
+              : state.notice ?? '正在处理录音…';
+    const label = (preparing || recording || processing) && state.notice ? `${status} ${state.notice}` : status;
     const time = `${String(Math.floor(state.elapsedSeconds / 60)).padStart(2, '0')}:${String(state.elapsedSeconds % 60).padStart(2, '0')}`;
     return h('div', { className: `ck-input-status ck-status-text cockpit-speech-status ${capturing || retry || sendError ? 'ck-danger' : 'ck-text-secondary'}` },
       h('span', { className: 'ck-status-marker', 'aria-hidden': true },

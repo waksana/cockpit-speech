@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import type { DraftSendResult, ModuleDraft } from '@cockpit/module-api';
+import type { DraftAskContext, DraftPurpose, DraftSendResult, ModuleDraft } from '@cockpit/module-api';
 import { prepareRecording } from './recorder.ts';
 import type { AudioEnvironment } from './recorder.ts';
 import { SpeechService } from './speech.ts';
@@ -83,14 +83,16 @@ function fixture() {
   return { env, sockets, prepare, start, grant, stream, track, context, worklet, pcm, errors,
     values: () => ({ stops, closes, captures }) };
 }
-function serviceFixture(f: ReturnType<typeof fixture>, writable = false, submit?: (revision: number) => Promise<DraftSendResult>) {
+function serviceFixture(f: ReturnType<typeof fixture>, writable = false,
+  options: { purpose?: DraftPurpose; askContext?: DraftAskContext; submit?: (revision: number) => Promise<DraftSendResult> } = {}) {
   let leases = 0;
   let text = '';
   let revision = 0;
+  let askContext = options.askContext;
   const draft: ModuleDraft = {
-    id: 'exact-input', sessionId: 's', purpose: { kind: 'prompt' },
+    id: 'exact-input', sessionId: 's', purpose: options.purpose ?? { kind: 'prompt' },
     subscribe: () => () => {},
-    getSnapshot: () => ({ text, revision, pending: false, unconfirmed: false, hasContent: !!text, retired: false, blocks: [] }),
+    getSnapshot: () => ({ text, revision, pending: false, unconfirmed: false, hasContent: !!text, retired: false, blocks: [], askContext }),
     editText: value => { assert.ok(writable, 'Failure must not edit'); text = value; revision++; },
     editTextIfRevision(value, expected) {
       assert.equal(writable, true, 'failure must not edit');
@@ -100,6 +102,7 @@ function serviceFixture(f: ReturnType<typeof fixture>, writable = false, submit?
       return true;
     },
     captureSend: () => {
+      const submit = options.submit;
       if (!submit) assert.fail('Draft-only recorder tests must not submit');
       return { send: submit, cancel() {} };
     },
@@ -113,8 +116,39 @@ function serviceFixture(f: ReturnType<typeof fixture>, writable = false, submit?
     prepare: (signal, fail, limit) => prepareRecording(signal, fail, limit, f.env), report: () => assert.fail('No error notification'),
   });
   service.setTarget({ draft, disabled: false, sendBlocked: false, selection: () => ({ start: 0, end: 0 }) });
-  return { service, draft, leases: () => leases };
+  return { service, draft, leases: () => leases, setAskContext: (value: DraftAskContext | undefined) => { askContext = value; } };
 }
+
+test('ask context reaches Azure configuration once per attempt, unchanged on background PCM replay', async t => {
+  const f = fixture();
+  const s = serviceFixture(f, true, {
+    purpose: { kind: 'ask', requestId: 'synthetic-question' },
+    askContext: { question: 'Select a synthetic city?', choices: ['Alpha', 'Beta'] },
+  });
+  t.after(() => s.service.dispose());
+  const starting = s.service.start();
+  s.setAskContext({ question: 'Updated question before permission resolves' });
+  f.grant(f.stream); await starting;
+  f.pcm(4);
+  s.service.clearTarget(s.draft.id);
+  await pump();
+  f.sockets[0]!.onerror?.();
+  await turn();
+  assert.equal(s.service.getSnapshot(s.draft.id).phase, 'retry');
+  s.setAskContext({ question: 'Unrelated replacement question', choices: ['Gamma'] });
+  s.service.setTarget({ draft: s.draft, disabled: false, sendBlocked: false, selection: () => ({ start: 0, end: 0 }) });
+  const retry = s.service.retry();
+  await pump();
+  assert.equal(f.sockets.length, 2);
+  for (const socket of f.sockets) {
+    const update = socket.sent[0] as { session: { audio: { input: { transcription: { prompt: string } } } } };
+    assert.equal(update.session.audio.input.transcription.prompt,
+      'Reference vocabulary:\nQuestion: Select a synthetic city?\nChoices:\n- Alpha\n- Beta');
+  }
+  f.sockets[1]!.commit(); f.sockets[1]!.final('synthetic answer'); await retry;
+  assert.equal(s.draft.getSnapshot().text, 'synthetic answer', 'reference question is not inserted in the answer');
+  assert.equal(f.values().captures, 1);
+});
 
 test('real recorder pipeline seals on navigation, writes a hidden draft and closes one connection per take', async t => {
   for (const mode of ['button', 'hold'] as const) {
@@ -140,13 +174,13 @@ test('active hold submits only after the real VAD pipeline drains every committe
   let submissions = 0;
   let acknowledge!: (result: DraftSendResult) => void;
   const reply = new Promise<DraftSendResult>(resolve => { acknowledge = resolve; });
-  const s = serviceFixture(f, true, async revision => {
+  const s = serviceFixture(f, true, { submit: async revision => {
     submissions++;
     assert.equal(revision, s.draft.getSnapshot().revision);
     assert.equal(s.leases(), 0);
     assert.equal(s.draft.getSnapshot().text, 'complete message');
     return reply;
-  });
+  } });
   t.after(() => s.service.dispose());
   const starting = s.service.start('hold'); f.grant(f.stream); await starting;
   f.pcm(); await pump();

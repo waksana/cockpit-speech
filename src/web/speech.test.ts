@@ -23,7 +23,8 @@ function store<T>(initial: T) {
   };
 }
 function draft(id = 'draft-1', purpose: DraftPurpose = { kind: 'prompt' }): ModuleDraft & { state: ReturnType<typeof store<ModuleDraftSnapshot>> } {
-  const state = store<ModuleDraftSnapshot>({ text: 'hello world', revision: 1, blocks: [], pending: false, unconfirmed: false, hasContent: true, retired: false });
+  const state = store<ModuleDraftSnapshot>({ text: 'hello world', revision: 1, blocks: [], pending: false, unconfirmed: false, hasContent: true, retired: false,
+    ...(purpose.kind === 'ask' ? { askContext: { question: 'Synthetic question?', choices: ['Alpha', 'Beta'] } } : {}) });
   return {
     id, sessionId: 's', purpose, ...state, state,
     editText(text) { state.set({ ...state.getSnapshot(), text, revision: state.getSnapshot().revision + 1 }); },
@@ -277,12 +278,76 @@ test('prompt, ask and plan insert at the captured selection only after stop; con
     await stopped;
     assert.equal(f.original.getSnapshot().text, 'hello speech');
     assert.equal(f.original.getSnapshot().blocks.length, 0);
-    assert.equal(f.values().capturedContext, 'initial context');
+    assert.equal(f.values().capturedContext, purpose.kind === 'ask'
+      ? 'Question: Synthetic question?\nChoices:\n- Alpha\n- Beta' : 'initial context');
     assert.equal(f.service.getSnapshot().recovery, null);
     assert.deepEqual(f.service.getSnapshot().focus, {
       id: f.original.id, revision: f.original.getSnapshot().revision, selection: { start: 12, end: 12 },
     });
   }
+});
+test('ask captures only its bound question before permission, even with an unavailable chat window', async t => {
+  const f = fixture({ purpose: { kind: 'ask', requestId: 'question' }, permission: true });
+  t.after(() => f.service.dispose());
+  f.chatWindow.set({ ...f.chatWindow.getSnapshot(), status: 'unavailable', sessionId: 'other' });
+  const starting = f.service.start();
+  assert.equal(f.values().capturedContext, 'Question: Synthetic question?\nChoices:\n- Alpha\n- Beta');
+  f.original.state.set({ ...f.original.getSnapshot(), askContext: { question: 'Changed while asking permission' } });
+  f.permission.resolve(f.recording); await starting;
+  assert.equal(f.values().capturedContext, 'Question: Synthetic question?\nChoices:\n- Alpha\n- Beta');
+  assert.equal(f.service.getSnapshot().notice, null);
+});
+test('missing ask question explicitly degrades to audio only, never the latest ordinary reply', async t => {
+  for (const askContext of [undefined, { question: ' ', choices: ['Alpha'] }]) {
+    const f = fixture({ purpose: { kind: 'ask', requestId: 'question' } });
+    t.after(() => f.service.dispose());
+    f.original.state.set({ ...f.original.getSnapshot(), askContext });
+    await f.service.start();
+    assert.equal(f.values().capturedContext, undefined);
+    assert.equal(f.service.getSnapshot().notice, '当前问题参考不可用，将仅根据录音转写。');
+    assert.equal(f.service.getSnapshot().phase, 'recording');
+    const stopped = f.service.stop(); f.result.resolve('audio only'); await stopped;
+    assert.equal(f.original.getSnapshot().text, 'hello audio only');
+  }
+});
+test('a hidden ask task retains context across session switching and retry, not a replacement question', async t => {
+  const f = fixture({ purpose: { kind: 'ask', requestId: 'reused' } });
+  t.after(() => f.service.dispose());
+  await f.service.start();
+  f.host.set({ ...f.host.getSnapshot(), sessionId: 'other' });
+  f.service.clearTarget(f.original.id);
+  await turn();
+  f.result.reject(new SpeechError('NETWORK', 'Synthetic failure'));
+  await turn();
+  const other = { ...draft('other-session', { kind: 'ask', requestId: 'reused' }), sessionId: 'other' };
+  other.state.set({ ...other.getSnapshot(), askContext: { question: 'Other session question' } });
+  f.service.setTarget({ draft: other, disabled: false, sendBlocked: false, selection: () => ({ start: 0, end: 0 }) });
+  assert.equal(f.service.canRetry(f.original.id), false);
+  f.original.state.set({ ...f.original.getSnapshot(), askContext: { question: 'Updated original question' } });
+  f.host.set({ ...f.host.getSnapshot(), sessionId: 's' });
+  f.service.setTarget({ draft: f.original, disabled: false, sendBlocked: false, selection: () => ({ start: 0, end: 0 }) });
+  const retried = f.service.retry();
+  f.retryResult.resolve('original answer'); await retried;
+  assert.equal(f.values().captures, 1);
+  assert.equal(f.values().capturedContext, 'Question: Synthetic question?\nChoices:\n- Alpha\n- Beta');
+  assert.equal(other.getSnapshot().text, 'hello world');
+  assert.equal(f.original.getSnapshot().text, 'hello original answer');
+});
+test('retired ask audio cannot supply context or results to a reused request ID lifetime', async t => {
+  const f = fixture({ purpose: { kind: 'ask', requestId: 'reused' } });
+  t.after(() => f.service.dispose());
+  await f.service.start();
+  const stopped = f.service.stop();
+  f.original.state.set({ ...f.original.getSnapshot(), retired: true, askContext: undefined });
+  const replacement = draft('new-ask-lifetime', { kind: 'ask', requestId: 'reused' });
+  replacement.state.set({ ...replacement.getSnapshot(), askContext: { question: 'Replacement question?', choices: ['Gamma'] } });
+  f.service.setTarget({ draft: replacement, disabled: false, sendBlocked: false, selection: () => ({ start: 0, end: 0 }) });
+  assert.equal(f.service.hasRetainedRecording(f.original.id), false);
+  f.result.resolve('late original answer'); await stopped;
+  assert.equal(replacement.getSnapshot().text, 'hello world');
+  await f.service.start();
+  assert.equal(f.values().capturedContext, 'Question: Replacement question?\nChoices:\n- Gamma');
+  assert.equal(f.values().captures, 2);
 });
 test('manual revisions win and successful text remains recoverable; explicit insertion preserves selection', async t => {
   const f = fixture(); t.after(() => f.service.dispose());

@@ -290,6 +290,29 @@ test('native acknowledgement owns only the submitted revision, not later unsent 
   assert.equal(f.original.draft.getSnapshot().text, 'later unsent words');
   assert.equal(f.service.getSnapshot().phase, 'idle');
 });
+test('explicit clear cancels a captured host intent whose deferred dispatch has not started', async t => {
+  const f = fixture(t);
+  let cancelled = false, dispatches = 0;
+  let dispatch!: () => void;
+  t.mock.method(f.original.draft, 'captureSend', () => ({
+    cancel() { cancelled = true; },
+    send: () => new Promise<DraftSendResult>(resolve => {
+      dispatch = () => {
+        if (cancelled) resolve({ status: 'blocked', reason: 'cancelled' });
+        else { dispatches++; resolve({ status: 'acknowledged' }); }
+      };
+    }),
+  }));
+  await f.service.start('hold');
+  const release = f.service.releaseHold();
+  f.takes[0]!.stop.resolve('not dispatched yet'); await turn();
+  assert.equal(f.service.getSnapshot().phase, 'sending');
+  f.service.clear();
+  dispatch(); await release;
+  assert.equal(cancelled, true);
+  assert.equal(dispatches, 0);
+  assert.equal(f.service.getSnapshot().phase, 'idle');
+});
 
 test('post-release text, attachment and ABA edits prevent sending without losing audio or new input', async t => {
   for (const change of ['text', 'attachment', 'attachment-aba', 'pending', 'peer'] as const) {

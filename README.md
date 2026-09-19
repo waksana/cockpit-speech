@@ -101,7 +101,7 @@ Focused or nonempty inputs keep native editing. To paste into an empty unfocused
 input, tap first, then use native long-press paste. Keyboard Tab still focuses
 the real textarea; the gesture layer adds no tab stop. The independent microphone
 button remains the accessible alternative and retains its existing behavior.
-Speech 0.6.0 requires the paired host's `draftLifecycleVersion: 1` and
+Speech 0.7.0 requires the paired host's `draftLifecycleVersion: 1` and
 `draftSubmissionVersion: 1` capabilities
 as well as Cockpit's additive public UI classes. It uses the
 existing `composerEditor` middleware for the full-width status row and leaves
@@ -196,13 +196,33 @@ only an explicit retry can resume updates. Inserting or discarding a partial
 recovery result also ends its retained retry operation, so those controls never
 leave hidden replay work behind.
 
-The excerpt is the **last 1,000 Unicode code points** of the newest eligible
-completed root assistant reply, captured at the first click. Eligibility needs
+For ordinary prompt inputs (and unchanged plan inputs), the excerpt is the
+**last 1,000 Unicode code points** of the newest eligible
+completed root assistant reply, captured when recording starts. Eligibility needs
 the matching native session origin, nonblank native message ID and text, and no
 agent ID or subtype. User/tool/system messages, children, subagents, skill output
 and incomplete/unknown-origin messages are excluded. Stale/unavailable windows
 contribute no context. The module uses the public read-only chat window, without
 DOM scraping or fetching additional history.
+
+For `ask_user` answer inputs, the reference instead comes from the captured
+draft's public, read-only `askContext`: its current question and ordered choices,
+not the latest ordinary assistant reply. `Question: ` precedes the trimmed
+question, followed by `Choices:` and one `- ` line per nonblank choice.
+The **entire reference, including labels, is at most 1,000 Unicode code points**.
+The question takes priority; remaining space goes to choices in their original
+order, truncating only the final fitting text without splitting a Unicode code
+point. A long question can consume the whole budget. No choices is valid.
+If the question is missing/blank or unavailable from the host, recording
+continues without reference text and the status row explicitly says so; it never
+substitutes a possibly unrelated assistant reply.
+
+The host binds that context to the exact session, ask request and draft lifetime.
+Speech captures it when recording starts, before awaiting microphone permission.
+Updates, page/session switches and manual replay of the same audio never replace
+the captured reference. Ended requests retire their drafts; a reused request ID
+gets a separate lifetime. Context is vocabulary for transcription, not an
+instruction to answer the question, and is never appended to the recognized text.
 
 The `Reference vocabulary:\n` prefix plus context is at most 1,022 code points.
 This prompt and all audio go **directly from the browser to Azure**. Backend
@@ -289,8 +309,8 @@ pnpm typecheck
 pnpm test
 pnpm build
 # After committing clean source; use a new output directory.
-node scripts/package.mjs module-output-0.6.0
-node scripts/verify-package.mjs module-output-0.6.0/cockpit-speech-0.6.0.tgz
+node scripts/package.mjs module-output-0.7.0
+node scripts/verify-package.mjs module-output-0.7.0/cockpit-speech-0.7.0.tgz
 ```
 
 Archives contain runtime code, worklet assets, licenses and exact source/SDK
