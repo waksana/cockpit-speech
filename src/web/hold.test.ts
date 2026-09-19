@@ -9,6 +9,7 @@ function fixture(t: TestContext) {
   let allowed = true;
   let phase = 'idle';
   let captured: number | undefined;
+  let bounds = { left: 10, top: 10, right: 110, bottom: 50 };
   const surface = {
     setPointerCapture(id: number) { captured = id; },
     hasPointerCapture(id: number) { return captured === id; },
@@ -16,7 +17,7 @@ function fixture(t: TestContext) {
   };
   const gesture = new HoldGesture({
     allowed: () => allowed && phase === 'idle',
-    bounds: () => ({ left: 10, top: 10, right: 110, bottom: 50 }),
+    bounds: () => bounds,
     phase: () => phase,
     start: () => { calls.push('start'); phase = 'permission'; },
     stop: () => { calls.push('stop'); phase = 'transcribing'; },
@@ -25,6 +26,7 @@ function fixture(t: TestContext) {
   });
   t.after(gesture.cancel);
   return { gesture, surface, calls, captured: () => captured,
+    bounds: (value: typeof bounds) => { bounds = value; },
     allowed: (value: boolean) => { allowed = value; },
     phase: (value: string) => { phase = value; } };
 }
@@ -72,6 +74,18 @@ test('release checks coordinates even when no move event was delivered', t => {
   f.gesture.down(point, f.surface); t.mock.timers.tick(HOLD_DELAY);
   f.phase('recording');
   f.gesture.up({ ...point, clientX: 200 });
+  assert.deepEqual(f.calls, ['start', 'cancel']);
+});
+test('unrelated scrolling preserves a hold, but moving the input away cancels it', t => {
+  const f = fixture(t);
+  f.gesture.down(point, f.surface); t.mock.timers.tick(HOLD_DELAY); f.phase('recording');
+  f.gesture.checkBounds();
+  assert.deepEqual(f.calls, ['start']);
+  f.bounds({ left: 10, top: 30, right: 110, bottom: 70 });
+  f.gesture.checkBounds();
+  assert.deepEqual(f.calls, ['start', 'cancel']);
+  f.bounds({ left: 10, top: 10, right: 110, bottom: 50 });
+  f.gesture.checkBounds(); f.gesture.up(point);
   assert.deepEqual(f.calls, ['start', 'cancel']);
 });
 test('release during permission aborts rather than scheduling a later stop', t => {

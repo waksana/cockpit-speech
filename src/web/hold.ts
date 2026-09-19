@@ -19,6 +19,7 @@ interface Press {
   id: number;
   surface: HoldSurface;
   started: boolean;
+  point: HoldPoint;
   timer?: ReturnType<typeof setTimeout>;
 }
 
@@ -42,11 +43,12 @@ export class HoldGesture {
     if (this.press) { this.cancel(); return false; }
     if (point.button !== 0 || !point.isPrimary || !this.options.allowed() || !this.inside(point)) return false;
     surface.setPointerCapture(point.pointerId);
-    const press: Press = { id: point.pointerId, surface, started: false };
+    const press: Press = { id: point.pointerId, surface, started: false,
+      point: { pointerId: point.pointerId, clientX: point.clientX, clientY: point.clientY } };
     this.press = press;
     press.timer = setTimeout(() => {
       if (this.press !== press) return;
-      if (!this.options.allowed()) { this.cancel(); return; }
+      if (!this.options.allowed() || !this.inside(press.point)) { this.cancel(); return; }
       press.started = true;
       this.options.start();
     }, HOLD_DELAY);
@@ -54,8 +56,11 @@ export class HoldGesture {
     return true;
   }
   move(point: HoldPoint): void {
-    if (this.press?.id === point.pointerId && !this.inside(point)) this.cancel();
+    if (this.press?.id !== point.pointerId) return;
+    this.press.point = { pointerId: point.pointerId, clientX: point.clientX, clientY: point.clientY };
+    if (!this.inside(point)) this.cancel();
   }
+  checkBounds = (): void => { if (this.press) this.move(this.press.point); };
   up(point: HoldPoint): void {
     const press = this.press;
     if (!press || press.id !== point.pointerId) return;

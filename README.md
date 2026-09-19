@@ -43,7 +43,8 @@ Moving outside the input bounds cancels immediately, including while waiting for
 the hold threshold or microphone permission. Moving back never resumes that
 press, and releasing afterward cannot submit. Cancellation discards the audio,
 not retains it for retry. Pointer capture loss/cancellation, window blur, page
-hiding, scrolling/resizing and input replacement also interrupt the gesture.
+hiding and input replacement also interrupt the gesture. Scroll/resize cancels
+only if the input bounds move away from the held pointer, not for unrelated chat scrolling.
 The bounds exclude File, microphone and send buttons.
 
 At 120 seconds, a held gesture stops capture and retains its bounded audio but
