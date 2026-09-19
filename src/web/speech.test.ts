@@ -64,6 +64,7 @@ function fixture(options: { permission?: boolean; purpose?: DraftPurpose; ready?
   let readinessError: unknown;
   let retryable = true;
   const levels: ((value: number, seconds: number) => void)[] = [];
+  const texts: ((value: string) => void)[] = [];
   const recording: Recording = {
     stop: async committed => { stops++; await ready; if (readinessError) throw readinessError; requests++; committed?.(); return result.promise; },
     retry: async committed => { requests++; committed?.(); return retryResult.promise; },
@@ -78,6 +79,7 @@ function fixture(options: { permission?: boolean; purpose?: DraftPurpose; ready?
       return {
         start: async (session, context, recordingOptions) => {
           if (recordingOptions?.onLevel) levels.push(recordingOptions.onLevel);
+          if (recordingOptions?.onText) texts.push(recordingOptions.onText);
           captures++; capturedContext = context;
           ready = session(signal).then(() => {}, error => { readinessError = error; });
           return options.permission ? permission.promise : recording;
@@ -98,8 +100,98 @@ function fixture(options: { permission?: boolean; purpose?: DraftPurpose; ready?
     setRetryable: (value: boolean) => { retryable = value; },
     values: () => ({ cancelled, stops, requests, captures, preparationsCancelled, readyCalls, capturedContext, capturedSignal }),
     limit: () => limitReached(), fail: (e: SpeechError) => recorderFailure(e),
-    level: (value: number, index = levels.length - 1, seconds = 12.5) => levels[index]!(value, seconds) };
+    level: (value: number, index = levels.length - 1, seconds = 12.5) => levels[index]!(value, seconds),
+    text: (value: string, index = texts.length - 1) => texts[index]!(value) };
 }
+test('live transcript snapshots replace the owned selection without focus or duplicate final writes', async t => {
+  for (const purpose of [{ kind: 'prompt' }, { kind: 'ask', requestId: 'a' }, { kind: 'plan', requestId: 'p' }] as const) {
+    const f = fixture({ purpose }); t.after(() => f.service.dispose());
+    await f.service.start('hold');
+    f.text('C'); assert.equal(f.original.getSnapshot().text, 'hello C');
+    assert.equal(f.service.ownsDraft(f.original.id), true);
+    f.text('AC'); assert.equal(f.original.getSnapshot().text, 'hello AC');
+    f.text('ABC'); assert.equal(f.original.getSnapshot().text, 'hello ABC');
+    assert.equal(f.original.getSnapshot().blocks.length, 1);
+    assert.equal(f.service.getSnapshot().phase, 'recording');
+    assert.equal(f.service.getSnapshot().focus, null);
+    const revision = f.original.getSnapshot().revision;
+    f.text('ABC'); assert.equal(f.original.getSnapshot().revision, revision);
+    const stopped = f.service.stop(); f.result.resolve('ABC'); await stopped;
+    assert.equal(f.original.getSnapshot().revision, revision);
+    assert.equal(f.original.getSnapshot().blocks.length, 0);
+    f.text('late'); assert.equal(f.original.getSnapshot().text, 'hello ABC');
+  }
+});
+test('silent recordings preserve selections and empty finals restore only owned provisional text', async t => {
+  for (const provisional of [false, true]) {
+    const f = fixture(); t.after(() => f.service.dispose());
+    await f.service.start();
+    if (provisional) { f.text('temporary'); assert.equal(f.original.getSnapshot().text, 'hello temporary'); }
+    f.text('');
+    assert.equal(f.original.getSnapshot().text, 'hello world');
+    const revision = f.original.getSnapshot().revision;
+    const stopped = f.service.stop(); f.result.resolve(''); await stopped;
+    assert.equal(f.original.getSnapshot().text, 'hello world');
+    assert.equal(f.original.getSnapshot().revision, revision);
+    assert.equal(f.service.getSnapshot().recovery, null);
+    assert.equal(f.service.getSnapshot().phase, 'idle');
+    assert.match(f.service.getSnapshot().notice!, /未识别到语音/);
+  }
+});
+test('manual edits and peer leases stop live writes while preserving the latest composed result', async t => {
+  for (const cause of ['revision', 'peer', 'pending']) {
+    const f = fixture(); t.after(() => f.service.dispose());
+    await f.service.start(); f.text('first');
+    if (cause === 'revision') f.original.editText('manual edit');
+    if (cause === 'peer') f.original.state.set({ ...f.original.getSnapshot(), blocks: [...f.original.getSnapshot().blocks, { id: 'peer', reason: 'busy' }] });
+    if (cause === 'pending') f.original.state.set({ ...f.original.getSnapshot(), pending: true });
+    const before = f.original.getSnapshot().text;
+    f.text('first second');
+    assert.equal(f.service.ownsDraft(f.original.id), false);
+    assert.equal(f.original.getSnapshot().text, before);
+    const stopped = f.service.stop(); f.result.resolve('first second final'); await stopped;
+    assert.equal(f.original.getSnapshot().text, before);
+    assert.equal(f.service.getSnapshot().recovery?.text, 'first second final');
+  }
+});
+test('replay updates the same draft region and clear preserves received text while rejecting late writes', async t => {
+  const f = fixture(); t.after(() => f.service.dispose());
+  await f.service.start(); f.text('partial first attempt');
+  const stopped = f.service.stop(); f.result.reject(new SpeechError('CONNECTION_CLOSED', 'Disconnected')); await stopped;
+  const retry = f.service.retry();
+  f.text('replayed'); assert.equal(f.original.getSnapshot().text, 'hello replayed');
+  f.retryResult.resolve('replayed final'); await retry;
+  assert.equal(f.original.getSnapshot().text, 'hello replayed final');
+  await f.service.start(); f.text('next');
+  const before = f.original.getSnapshot().text;
+  f.service.clear(); f.text('late');
+  assert.equal(f.original.getSnapshot().text, before);
+  assert.equal(f.original.getSnapshot().blocks.length, 0);
+});
+test('failed-stream recovery can be inserted or discarded without a dead retained operation', async t => {
+  for (const action of ['insert', 'discard']) {
+    const f = fixture(); t.after(() => f.service.dispose());
+    await f.service.start(); f.text('first');
+    f.original.editText('manual words');
+    f.text('partial recovery');
+    const stopped = f.service.stop();
+    f.result.reject(new SpeechError('CONNECTION_CLOSED', 'Disconnected')); await stopped;
+    assert.equal(f.service.hasRetainedRecording(), true);
+    assert.equal(f.service.getSnapshot().recovery?.text, 'partial recovery');
+    f.text('late failed attempt');
+    assert.equal(f.service.getSnapshot().recovery?.text, 'partial recovery');
+    assert.equal(f.service.canInsert(), true);
+    if (action === 'insert') f.service.insertRecovery();
+    else f.service.dismiss();
+    assert.equal(f.original.getSnapshot().text, action === 'insert' ? 'manualpartial recovery words' : 'manual words');
+    assert.equal(f.service.getSnapshot().phase, 'idle');
+    assert.equal(f.service.getSnapshot().recovery, null);
+    assert.equal(f.service.hasRetainedRecording(), false);
+    assert.equal(f.service.canStart(), true);
+    f.text('later callback');
+    assert.equal(f.original.getSnapshot().text, action === 'insert' ? 'manualpartial recovery words' : 'manual words');
+  }
+});
 test('elapsed time follows captured samples and clear resets retained operations without changing drafts', async t => {
   const f = fixture(); t.after(() => f.service.dispose());
   f.service.setPressing(f.original.id, true);
