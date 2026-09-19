@@ -1,3 +1,24 @@
+# Cockpit Speech 0.8.1
+
+For #25, explicitly request `server_vad.silence_duration_ms: 1000` in both
+credential creation and browser session update. Only the user's final one-second
+choice is implemented, not the earlier 1.5-second proposal. Before uploading audio,
+require `session.updated` to confirm the exact numeric value; missing/mismatched
+values fail visibly without default fallback. Threshold, prefix padding and all
+other VAD parameters remain unchanged/unset.
+
+Normal F8/pointer release and button stop keep the final tail upload, commit and
+clear without a new one-second client delay. Capture, cancellation, empty results,
+background original-draft writes, once-only send and native ACK policy are unchanged.
+SDK remains Cockpit 0.2.6 / `0b8d215bbfadd640b1e0e3cad410214019336f0b`.
+
+Local synthetic coverage does not establish cloud acceptance or recognition
+quality. No cloud audio experiment, deployment, production restart or quota change
+is included. The documented 500ms default is not a confirmed prior Azure effective
+value; this change does not prove a rate-limit fix or resolve #24.
+
+---
+
 # Cockpit Speech 0.8.0
 
 Fixed desktop F8 push-to-talk for #20, reusing #16's original-draft hold

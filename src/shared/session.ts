@@ -1,5 +1,7 @@
 import { isRecord, SpeechError } from './limits.ts';
 
+export const SERVER_VAD_SILENCE_MS = 1000;
+
 export interface SpeechSession {
   clientSecret: string;
   expiresAt: number;
