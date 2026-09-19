@@ -30,6 +30,7 @@ interface Operation {
   appliedText?: string;
   conflicted: boolean;
   readonly mode: 'button' | 'hold';
+  readonly focusOnCompletion: boolean;
   sendIntent?: CapturedDraftSend;
 }
 export interface SpeechOptions {
@@ -168,7 +169,8 @@ export class SpeechService {
       this.error(operation, new SpeechError('DRAFT_CONFLICT', '无法修改原输入框，识别结果将保留供恢复。'));
     }
   }
-  async start(mode: 'button' | 'hold' = 'button', id = this.target?.draft.id): Promise<void> {
+  async start(mode: 'button' | 'hold' = 'button', id = this.target?.draft.id,
+    options: { focusOnCompletion?: boolean } = {}): Promise<void> {
     if (!this.canStart(id)) return;
     const target = this.target!;
     const snapshot = target.draft.getSnapshot();
@@ -176,7 +178,7 @@ export class SpeechService {
       identity: identity(target.draft), draft: target.draft, revision: snapshot.revision,
       text: snapshot.text, selection: target.selection(), controller: new AbortController(),
       release: () => {}, unsubscribe: () => {}, state: { ...idle, phase: 'permission' },
-      transcript: '', conflicted: false, mode,
+      transcript: '', conflicted: false, mode, focusOnCompletion: options.focusOnCompletion ?? true,
     };
     this.operations.set(operation.identity.id, operation);
     this.capture = operation;
@@ -304,10 +306,10 @@ export class SpeechService {
           return;
         }
         this.finish(operation);
-        if (text) {
+        if (text && operation.focusOnCompletion) {
           const caret = Math.max(0, Math.min(operation.text.length, operation.selection.start)) + text.length;
           this.focusTarget({ start: caret, end: caret }, operation.identity.id);
-        } else if (this.target?.draft.id === operation.identity.id) {
+        } else if (!text && this.target?.draft.id === operation.identity.id) {
           this.view = { ...idle, notice: '未识别到语音，草稿未被替换。' };
         }
         this.notify();

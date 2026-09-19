@@ -4,6 +4,7 @@ import type { ComposerInputProps, ModuleDraft, ModuleFrontendContext } from '@co
 import { activate } from './index.ts';
 import { CANCEL_DISTANCE, HOLD_DELAY, HoldGesture } from './hold.ts';
 import type { SpeechService } from './speech.ts';
+import { keyboardDOM } from './keyboard.fixture.test.ts';
 
 type Element = { type: unknown; props: Record<string, unknown>; children: (Element | string | null)[] };
 const settle = () => new Promise<void>(resolve => setImmediate(resolve));
@@ -21,8 +22,10 @@ async function fixture(t: TestContext, pointerType: 'mouse' | 'touch') {
     close() {},
   };
   const restoreGlobals: (() => void)[] = [];
+  const dom = keyboardDOM();
+  const controller = new AbortController();
   for (const [key, value] of Object.entries({
-    window: new EventTarget(), document: new EventTarget(), isSecureContext: true,
+    window: dom.window, document: dom.document, isSecureContext: true,
     navigator: { mediaDevices: { getUserMedia() { captures++; return permission; } } },
     AudioContext: class {
       state = 'running';
@@ -67,7 +70,7 @@ async function fixture(t: TestContext, pointerType: 'mouse' | 'touch') {
   let service!: SpeechService;
   const context = {
     apiVersion: 2, uiVersion: 1, chatWindowVersion: 1, composerInputVersion: 1, draftLifecycleVersion: 1, draftSubmissionVersion: 1,
-    signal: new AbortController().signal,
+    signal: controller.signal,
     request: (_path: string, init: RequestInit) => {
       requests++;
       return new Promise<Response>((_resolve, reject) => {
@@ -117,7 +120,7 @@ async function fixture(t: TestContext, pointerType: 'mouse' | 'touch') {
   };
   const frontend = await activate(context);
   t.after(() => {
-    try { for (const slot of slots.toReversed()) slot.cleanup?.(); service.dispose(); }
+    try { for (const slot of slots.toReversed()) slot.cleanup?.(); controller.abort(); service.dispose(); }
     finally { for (const restore of restoreGlobals) restore(); }
   });
   const input = frontend.components!.find(component => component.boundary === 'composerInput')!;
@@ -129,12 +132,10 @@ async function fixture(t: TestContext, pointerType: 'mouse' | 'touch') {
   const StatusEditor = status.wrap(() => null) as unknown as (props: { draft: ModuleDraft }) => Element;
   const Status = (StatusEditor({ draft }).children[0] as Element).type as (props: { id: string }) => Element | null;
   const editor = {
-    ownerDocument: { activeElement: null as unknown },
-    getBoundingClientRect: () => ({ left: 0, right: 200, top: 0, bottom: 80 }),
-    selectionStart: 0, selectionEnd: 0,
+    ...dom.editor(),
     focus() { focuses++; this.ownerDocument.activeElement = this; },
   };
-  const props: ComposerInputProps = {
+  let props: ComposerInputProps = {
     draft, operation: 'prompt', disabled: false, sendBlocked: false, value: '',
     onSubmit: () => assert.fail('never submit'), onChange() {},
   };
@@ -166,7 +167,9 @@ async function fixture(t: TestContext, pointerType: 'mouse' | 'touch') {
     return render();
   };
   return {
-    service, render, event, grant: () => grant(stream),
+    service, render, event, grant: () => grant(stream), dom, editor,
+    updateProps: (patch: Partial<ComposerInputProps>) => { props = { ...props, ...patch }; render(); },
+    key: (type: 'keydown' | 'keyup', patch?: Partial<KeyboardEvent>) => { const event = dom.key(type, patch); render(); return event; },
     holding: () => gesture.getSnapshot(),
     clickMic: () => { ((tree.children[1] as Element).props.onClick as () => void)(); return render(); },
     values: () => ({ captures, contexts, requests, trackStops, focuses, leases, intents, captured }),
@@ -255,4 +258,63 @@ test('microphone button still starts permission immediately without a pending ho
   f.grant(); await settle();
   assert.equal(f.render(), null);
   assert.equal(f.values().trackStops, 1);
+});
+
+test('F8 uses real preparation and captures one intent only after ready; mic stop remains draft-only', async t => {
+  for (const release of ['keyup', 'mic'] as const) {
+    await t.test(release, async t => {
+      const f = await fixture(t, 'mouse');
+      f.key('keydown');
+      assert.equal(f.service.getSnapshot().phase, 'permission');
+      assert.equal(f.holding(), false);
+      f.key('keydown', { repeat: true });
+      f.grant(); await settle(); f.render();
+      assert.equal(f.service.getSnapshot().phase, 'recording');
+      if (release === 'mic') f.clickMic();
+      f.key('keyup'); f.key('keyup');
+      assert.equal(f.values().captures, 1);
+      assert.equal(f.values().trackStops, 1);
+      assert.equal(f.values().intents, release === 'keyup' ? 1 : 0);
+    });
+  }
+});
+
+test('F8 startup departure releases late permission and never captures send intent', async t => {
+  for (const action of ['keyup', 'blur', 'hidden', 'escape', 'disabled', 'nonempty'] as const) {
+    await t.test(action, async t => {
+      const f = await fixture(t, 'mouse');
+      f.key('keydown');
+      if (action === 'keyup') f.key('keyup');
+      if (action === 'blur') f.dom.window.dispatchEvent(new Event('blur'));
+      if (action === 'hidden') { f.dom.document.visibilityState = 'hidden'; f.dom.document.dispatchEvent(new Event('visibilitychange')); }
+      if (action === 'escape') f.key('keydown', { key: 'Escape' });
+      if (action === 'disabled') f.updateProps({ disabled: true });
+      if (action === 'nonempty') f.updateProps({ value: 'manual' });
+      f.grant(); await settle();
+      f.key('keyup');
+      assert.equal(f.service.getSnapshot().phase, 'idle');
+      assert.equal(f.values().trackStops, 1);
+      assert.equal(f.values().leases, 0);
+      assert.equal(f.values().intents, 0);
+    });
+  }
+});
+
+test('F8 and pending/active pointer gestures cannot take over each other or button capture', async t => {
+  for (const entry of ['pointer-pending', 'pointer-active', 'button', 'keyboard'] as const) {
+    await t.test(entry, async t => {
+      const f = await fixture(t, 'touch');
+      if (entry.startsWith('pointer')) {
+        f.event('onPointerDown');
+        if (entry === 'pointer-active') t.mock.timers.tick(HOLD_DELAY);
+      } else if (entry === 'button') f.clickMic();
+      else f.key('keydown');
+      if (entry === 'keyboard') f.event('onPointerDown');
+      else { f.key('keydown'); f.key('keyup'); }
+      assert.equal(f.values().captures, entry === 'pointer-pending' ? 0 : 1);
+      assert.equal(f.values().intents, 0);
+      if (entry === 'pointer-pending') f.event('onPointerCancel');
+      f.service.clear(); f.grant(); await settle();
+    });
+  }
 });
