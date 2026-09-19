@@ -50,10 +50,23 @@ The returned WebSocket origin/path is locally constructed and strictly validated
   connection/cursor over the same bytes, without reopening the microphone.
   Connections close independently of draft insertion. No automatic reconnect,
   retry, backend audio upload or disk persistence exists.
-- `speech.ts` owns the exact draft, original revision/selection/context and lease.
-  Failure releases the lease but retains replayable audio for that input only.
-  Retry reacquires a lease; replacement/navigation/cancellation destroys the
-  recording. Superseded completion callbacks cannot affect the new attempt.
+- `speech.ts` owns a map of exact draft lifetimes, each with its original
+  revision/selection/context, state, audio and lease. There is one capture owner,
+  but no count limit/eviction or network concurrency queue. Failure releases the
+  lease and retains audio; retry reacquires only that draft's lease. Replacement,
+  navigation and hiding stop capture and complete the original task in the
+  background. Permission-stage departure aborts rather than starting later.
+  Explicit cancel/clear, module disposal and host-observed permanent retirement
+  destroy the owned task. The user-approved `AUDIO_TOO_SHORT` exception also
+  discards an unusable under-100-ms take; other device/network failures retain it.
+  Superseded callbacks cannot affect another attempt.
+- Host `draftLifecycleVersion: 1` exposes observable `snapshot.retired` and
+  `editTextIfRevision(text, revision)`. Completion releases its own lease, then
+  asks the host for a synchronous guarded write. Revision, pending/unconfirmed,
+  competing leases, retirement, revocation and persistence failure remain host
+  boundaries. On conflict, audio and text remain until manual insertion/discard;
+  no hidden textarea lookup or native send is used. The visible target only
+  governs starting/retrying, focus and UI projection, never background ownership.
 
 Reused credentials may produce equal Azure session IDs despite isolated
 connections. Local object ownership and committed-item matching, not provider
@@ -97,9 +110,12 @@ release for a 64 CSS pixel upward swipe from the press origin. Once cancelled,
 ownership and timer clear before capture release, then existing speech
 cancellation destroys the recording. Other directions can leave the original
 input without cancelling. Release while starting cancels; only release during
-recording stops/transcribes. Unmount, draft/host invalidation, visibility loss,
-window blur, resize and Escape/Tab cancel; unrelated scrolling does not.
-The independent microphone button and post-stop retry/recovery paths are unchanged.
+recording stops/transcribes. Unmount, temporary draft/host unavailability,
+visibility loss, pointer capture loss, window blur, resize and Tab interrupt:
+they detach gesture ownership and stop/transcribe without discarding audio.
+Escape and upward swipe still explicitly cancel. Late release/capture-loss events
+cannot cancel an interrupted background task. Unrelated scrolling does not
+interrupt. Button capture receives the same page/host interruption handling.
 
 Both hold and microphone-button recordings use the same status feedback.
 The status marker's 7px dot scales from 1 to 2; the stop icon never scales.
@@ -110,8 +126,8 @@ the hold threshold. Short-tap focus still uses the completed click.
 
 Hold starts pass `waitForStop` to the recording preparation. At the render or wall
 limit capture stops, but the transport queue's sealed view stays false until the
-explicit release calls stop. Thus a capped buffer cannot auto-commit while
-still held. Upward cancellation clears it even after capture has stopped. The
+release or navigation interruption calls stop. Thus a capped buffer cannot
+auto-commit while still held. Upward cancellation clears it even after capture has stopped. The
 microphone button's limit policy is unchanged.
 
 ## Existing validation tools

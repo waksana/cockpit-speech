@@ -22,9 +22,9 @@ test('editor refs preserve object refs, callback nulls and React 19 cleanup', ()
   assert.equal(cleaned, 1); assert.equal(local.current, null);
 });
 test('frontend requires additive capabilities rather than assuming them from API v2', () => {
-  for (const patch of [{ chatWindowVersion: undefined }, { composerInputVersion: undefined }]) {
+  for (const patch of [{ chatWindowVersion: undefined }, { composerInputVersion: undefined }, { draftLifecycleVersion: undefined }]) {
     assert.throws(() => activate({
-      apiVersion: 2, uiVersion: 1, chatWindowVersion: 1, composerInputVersion: 1,
+      apiVersion: 2, uiVersion: 1, chatWindowVersion: 1, composerInputVersion: 1, draftLifecycleVersion: 1,
       state: { chatWindow: {}, bindDraft() {} }, ...patch,
     } as unknown as ModuleFrontendContext), /配套宿主/);
   }
@@ -48,7 +48,7 @@ test('input middleware preserves native textarea props and keeps decision microp
   const cleanupEffects = () => { for (const cleanup of effects.splice(0).reverse()) cleanup(); };
   const host = { getSnapshot: () => ({ sessionId: 's', visible: true, connected: true }), subscribe: () => () => {} };
   const context = {
-    apiVersion: 2, uiVersion: 1, chatWindowVersion: 1, composerInputVersion: 1,
+    apiVersion: 2, uiVersion: 1, chatWindowVersion: 1, composerInputVersion: 1, draftLifecycleVersion: 1,
     signal: new AbortController().signal, request: async () => { throw new Error('No HTTP from render'); }, report() {},
     createPortal: () => assert.fail('recording feedback must stay in normal component flow'),
     react: {
@@ -58,9 +58,11 @@ test('input middleware preserves native textarea props and keeps decision microp
       useState: () => [focused, () => {}],
       useMemo: (factory: () => unknown) => factory(),
       useCallback: (fn: unknown) => fn,
-      useSyncExternalStore: (_subscribe: unknown, snapshot: () => unknown) =>
-        snapshot === service?.getSnapshot ? { ...service.getSnapshot(), phase, error, level }
-          : typeof snapshot() === 'boolean' ? holding : snapshot(),
+      useSyncExternalStore: (_subscribe: unknown, snapshot: () => unknown) => {
+        const value = snapshot();
+        return value && typeof value === 'object' && 'phase' in value ? { ...value, phase, error, level }
+          : typeof value === 'boolean' ? holding : value;
+      },
       useLayoutEffect: (effect: () => void | (() => void)) => { const cleanup = effect(); if (cleanup) effects.push(cleanup); },
     },
     state: {
@@ -88,8 +90,8 @@ test('input middleware preserves native textarea props and keeps decision microp
       const nativeTextChange = () => {};
       const draft = {
         id: operation, sessionId: 's', purpose: operation === 'prompt' ? { kind: operation } : { kind: operation, requestId: 'request' },
-        getSnapshot: () => ({ text: '', revision: 0, pending: false, unconfirmed: false, hasContent: false, blocks: [] }),
-        subscribe: () => () => {}, editText() {}, block: () => () => {},
+        getSnapshot: () => ({ text: '', revision: 0, pending: false, unconfirmed: false, hasContent: false, blocks: [], retired: false }),
+        subscribe: () => () => {}, editText() {}, editTextIfRevision: () => true, block: () => () => {},
       } as ModuleDraft;
       const sendBlocked = operation === 'ask' || operation === 'elicitation';
       const onPaste = () => {};
@@ -205,7 +207,8 @@ test('input middleware preserves native textarea props and keeps decision microp
     assert.equal((tree.children[0] as Element).type, Base);
     assert.equal((tree.children[0] as Element).props, props);
     assert.equal(typeof (tree.children[1] as Element).type, 'function', 'feedback follows the whole composer');
-    const Panel = (tree.children[1] as Element).type as () => Element | null;
+    const PanelComponent = (tree.children[1] as Element).type as (props: { id: string }) => Element | null;
+    const Panel = () => PanelComponent({ id: 'prompt' });
     for (const current of ['permission', 'recording', 'stopping', 'transcribing', 'retry'] as const) {
       phase = current;
       assert.equal(Panel(), null, 'no phase text, timer or cancel panel');
@@ -219,7 +222,8 @@ test('input middleware preserves native textarea props and keeps decision microp
     const statusTree = StatusEditor(props);
     assert.equal(statusTree.props.className, 'cockpit-speech-editor');
     assert.equal((statusTree.children[1] as Element).type, Base);
-    const Status = (statusTree.children[0] as Element).type as () => Element | null;
+    const StatusComponent = (statusTree.children[0] as Element).type as (props: { id: string }) => Element | null;
+    const Status = () => StatusComponent({ id: 'prompt' });
     assert.equal(Status(), null);
     for (const current of ['permission', 'recording', 'stopping', 'transcribing', 'retry'] as const) {
       phase = current;

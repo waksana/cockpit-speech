@@ -21,9 +21,9 @@ export interface SpeechSnapshot {
 }
 interface Operation {
   identity: Identity; draft: ModuleDraft; revision: number; selection: Selection; text: string;
-  controller: AbortController; release(): void; recording?: Recording; context?: string;
-  preparation?: RecordingPreparation; limited?: boolean;
-  completion?: object;
+  controller: AbortController; release(): void; unsubscribe(): void;
+  state: SpeechSnapshot; recording?: Recording; context?: string;
+  preparation?: RecordingPreparation; limited?: boolean; completion?: object;
 }
 export interface SpeechOptions {
   signal: AbortSignal;
@@ -36,6 +36,8 @@ export interface SpeechOptions {
 const purposeKey = (purpose: DraftPurpose) => purpose.kind === 'prompt' ? 'prompt' : `${purpose.kind}:${purpose.requestId}`;
 const identity = (draft: ModuleDraft): Identity => ({ id: draft.id, sessionId: draft.sessionId, purpose: purposeKey(draft.purpose) });
 const matches = (a: Identity, b: Identity) => a.id === b.id && a.sessionId === b.sessionId && a.purpose === b.purpose;
+const idle: SpeechSnapshot = { phase: 'idle', pressing: false, elapsedSeconds: 0, holdingAtLimit: false,
+  level: 0, error: null, notice: null, recovery: null, focus: null };
 
 export function insertText(text: string, addition: string, selection: Selection): string {
   const start = Math.max(0, Math.min(text.length, selection.start));
@@ -44,29 +46,39 @@ export function insertText(text: string, addition: string, selection: Selection)
 }
 
 export class SpeechService {
-  private state: SpeechSnapshot = { phase: 'idle', pressing: false, elapsedSeconds: 0, holdingAtLimit: false, level: 0, error: null, notice: null, recovery: null, focus: null };
   private readonly listeners = new Set<() => void>();
+  private readonly operations = new Map<string, Operation>();
   private target: Target | null = null;
-  private operation: Operation | null = null;
+  private capture: Operation | null = null;
+  private view: SpeechSnapshot = idle;
   private disposed = false;
   private readonly options: SpeechOptions;
   private readonly unsubscribe: () => void;
   constructor(options: SpeechOptions) {
     this.options = options;
     this.unsubscribe = options.host.subscribe(() => {
-      if (this.operation && !this.hostReady(this.operation.identity.sessionId)) this.cancel('会话、页面可见性或连接已变化，语音输入已取消。');
+      if (this.capture && !this.hostReady(this.capture.identity.sessionId)) this.interrupt(this.capture.identity.id);
+      this.notify();
     });
     options.signal.addEventListener('abort', this.dispose, { once: true });
     if (options.signal.aborted) this.dispose();
   }
-  getSnapshot = (): SpeechSnapshot => this.state;
+  getSnapshot = (id = this.target?.draft.id): SpeechSnapshot =>
+    (id ? this.operations.get(id)?.state : undefined) ?? (id === this.target?.draft.id ? this.view : idle);
   subscribe = (listener: () => void): (() => void) => {
     this.listeners.add(listener);
     return () => { this.listeners.delete(listener); };
   };
-  private update(change: Partial<SpeechSnapshot>): void {
-    this.state = { ...this.state, ...change };
+  private notify(): void {
+    const visible = this.target && this.operations.get(this.target.draft.id);
+    if (visible) visible.state = { ...visible.state };
+    else this.view = { ...this.view };
     for (const listener of this.listeners) listener();
+  }
+  private update(operation: Operation, change: Partial<SpeechSnapshot>): void {
+    if (!this.current(operation)) return;
+    operation.state = { ...operation.state, ...change };
+    this.notify();
   }
   private hostReady(sessionId: string): boolean {
     const host = this.options.host.getSnapshot();
@@ -74,167 +86,207 @@ export class SpeechService {
   }
   setTarget(target: Target): void {
     if (this.disposed) return;
+    if (this.capture && (!matches(this.capture.identity, identity(target.draft)) || target.disabled || target.sendBlocked)) {
+      this.interrupt(this.capture.identity.id);
+    }
+    if (this.target?.draft.id !== target.draft.id) this.view = idle;
     this.target = target;
-    if (this.operation && (!matches(this.operation.identity, identity(target.draft)) || target.disabled || target.sendBlocked)) {
-      this.cancel('输入目标已变化或不再接受文字，语音输入已取消。');
-    } else this.update({});
+    this.notify();
   }
   clearTarget(id: string): void {
     if (this.target?.draft.id !== id) return;
     this.target = null;
-    this.update({ focus: null, pressing: false, elapsedSeconds: 0 });
-    if (this.operation) this.cancel('原输入框已关闭，语音输入已取消。');
-    else if (!this.state.recovery) this.update({ phase: 'idle', error: null, notice: null });
+    this.view = idle;
+    const operation = this.operations.get(id);
+    if (operation) {
+      this.update(operation, { focus: null, pressing: false });
+      this.interrupt(id);
+    }
+    this.notify();
   }
   setPressing(id: string, pressing: boolean): void {
-    if (this.target?.draft.id !== id || this.state.pressing === pressing) return;
-    this.update({ pressing });
+    if (this.target?.draft.id !== id) return;
+    const operation = this.operations.get(id);
+    if (operation) this.update(operation, { pressing });
+    else { this.view = { ...this.view, pressing }; this.notify(); }
   }
-  focusTarget(selection?: Selection): void {
+  focusTarget(selection?: Selection, id = this.target?.draft.id): void {
     const target = this.target;
-    if (!target || target.disabled || !this.hostReady(target.draft.sessionId)) return;
-    this.update({ focus: { id: target.draft.id, revision: target.draft.getSnapshot().revision, selection: selection ?? target.selection() } });
+    if (!target || target.draft.id !== id || target.disabled || !this.hostReady(target.draft.sessionId)) return;
+    this.view = { ...idle, focus: { id: target.draft.id, revision: target.draft.getSnapshot().revision, selection: selection ?? target.selection() } };
+    this.notify();
   }
-  canStart(): boolean {
-    if (this.disposed || this.operation || this.state.recovery || !this.target) return false;
-    try { return this.writable(this.target); } catch { return false; }
+  canStart(id = this.target?.draft.id): boolean {
+    if (this.disposed || this.capture || !id || this.operations.has(id) || this.target?.draft.id !== id) return false;
+    return this.writable(this.target);
   }
   private writable(target: Target): boolean {
     const draft = target.draft.getSnapshot();
     return !target.disabled && !target.sendBlocked && this.hostReady(target.draft.sessionId)
-      && !draft.pending && !draft.unconfirmed && draft.blocks.length === 0;
+      && !draft.retired && !draft.pending && !draft.unconfirmed && draft.blocks.length === 0;
   }
   private current(operation: Operation): boolean {
-    return !this.disposed && this.operation === operation && !operation.controller.signal.aborted
-      && !!this.target && matches(operation.identity, identity(this.target.draft)) && this.hostReady(operation.identity.sessionId);
+    return !this.disposed && this.operations.get(operation.identity.id) === operation && !operation.controller.signal.aborted;
   }
-  async start(mode: 'button' | 'hold' = 'button'): Promise<void> {
-    if (!this.canStart()) return;
+  async start(mode: 'button' | 'hold' = 'button', id = this.target?.draft.id): Promise<void> {
+    if (!this.canStart(id)) return;
     const target = this.target!;
     const snapshot = target.draft.getSnapshot();
-    let operation: Operation;
+    const operation: Operation = {
+      identity: identity(target.draft), draft: target.draft, revision: snapshot.revision,
+      text: snapshot.text, selection: target.selection(), controller: new AbortController(),
+      release: () => {}, unsubscribe: () => {}, state: { ...idle, phase: 'permission' },
+    };
+    this.operations.set(operation.identity.id, operation);
+    this.capture = operation;
+    operation.unsubscribe = operation.draft.subscribe(() => {
+      if (operation.draft.getSnapshot().retired) {
+        this.finish(operation);
+        this.notify();
+      }
+    });
+    this.view = idle;
     try {
-      const context = recentContext(this.options.host.getSnapshot(), this.options.chatWindow.getSnapshot(), target.draft.sessionId);
-      operation = {
-        identity: identity(target.draft), draft: target.draft, revision: snapshot.revision,
-        text: snapshot.text, selection: target.selection(), controller: new AbortController(),
-        release: target.draft.block('正在录音或转写，请完成后再发送。'),
-        context,
-      };
-    } catch {
-      this.update({ phase: 'retry' });
-      this.error(new SpeechError('DRAFT_UNAVAILABLE', '当前输入框已无法接受语音输入。'));
-      return;
-    }
-    this.operation = operation;
-    this.update({ phase: 'permission', elapsedSeconds: 0, holdingAtLimit: false, level: 0, error: null, notice: null, focus: null });
-    try {
+      operation.context = recentContext(this.options.host.getSnapshot(), this.options.chatWindow.getSnapshot(), target.draft.sessionId);
+      operation.release = target.draft.block('正在录音或转写，请完成后再发送。');
+      // A synchronous host notification can retire or interrupt the owner while acquiring its lease.
+      if (!this.current(operation)) { this.release(operation); return; }
+      this.notify();
       operation.preparation = this.options.prepare(operation.controller.signal, error => this.fail(operation, error), () => {
         operation.limited = true;
-        if (this.current(operation) && this.state.phase === 'recording') {
-          if (mode === 'hold') this.update({ holdingAtLimit: true, elapsedSeconds: 120, level: 0 });
-          else void this.stop();
+        if (this.current(operation) && operation.state.phase === 'recording') {
+          if (mode === 'hold') this.update(operation, { holdingAtLimit: true, elapsedSeconds: 120, level: 0 });
+          else void this.stop(operation.identity.id);
         }
       });
       const recording = await operation.preparation.start(this.options.session, operation.context, {
         waitForStop: mode === 'hold',
         onLevel: (value, seconds) => {
-          if (this.current(operation) && this.state.phase === 'recording' && !this.state.holdingAtLimit) {
-            this.update({ level: value, elapsedSeconds: Math.min(120, Math.floor(seconds)) });
+          if (this.current(operation) && operation.state.phase === 'recording' && !operation.state.holdingAtLimit) {
+            this.update(operation, { level: value, elapsedSeconds: Math.min(120, Math.floor(seconds)) });
           }
         },
       });
       if (!this.current(operation)) { recording.cancel(); return; }
       operation.recording = recording;
-      this.update({ phase: 'recording' });
+      if (operation.state.phase !== 'permission') return;
+      this.update(operation, { phase: 'recording' });
       if (operation.limited) {
-        if (mode === 'hold') this.update({ holdingAtLimit: true, elapsedSeconds: 120, level: 0 });
-        else void this.stop();
+        if (mode === 'hold') this.update(operation, { holdingAtLimit: true, elapsedSeconds: 120, level: 0 });
+        else void this.stop(operation.identity.id);
       }
     } catch (error) { this.fail(operation, error); }
   }
-  async stop(): Promise<void> {
-    const operation = this.operation;
-    if (!operation?.recording || this.state.phase !== 'recording') return;
+  // Navigation ends capture; only explicit cancel/discard destroys a live draft's task.
+  interrupt(id = this.target?.draft.id): void {
+    const operation = id ? this.operations.get(id) : undefined;
+    if (!operation) return;
+    this.update(operation, { pressing: false, focus: null });
+    if (operation.state.phase === 'permission') this.cancel(id);
+    else if (operation.state.phase === 'recording') void this.stop(id);
+  }
+  async stop(id = this.target?.draft.id): Promise<void> {
+    const operation = id ? this.operations.get(id) : undefined;
+    if (!operation?.recording || operation.state.phase !== 'recording') return;
     await this.complete(operation, false);
   }
-  canRetry(): boolean {
-    if (this.state.phase !== 'retry' || !this.target || this.disposed) return false;
-    try {
-      return this.writable(this.target) && (!this.operation || (this.current(this.operation) && !!this.operation.recording?.retryable()));
-    } catch { return false; }
+  canRetry(id = this.target?.draft.id): boolean {
+    const operation = id ? this.operations.get(id) : undefined;
+    return !!operation && operation.state.phase === 'retry' && !this.disposed && this.target?.draft.id === id
+      && this.writable(this.target) && (operation.recording ? operation.recording.retryable() : !this.capture);
   }
-  async retry(): Promise<void> {
-    if (!this.canRetry()) return;
-    const operation = this.operation;
-    if (!operation) { await this.start(); return; }
+  async retry(id = this.target?.draft.id): Promise<void> {
+    if (!this.canRetry(id)) return;
+    const operation = this.operations.get(id!)!;
+    if (!operation.recording) {
+      this.finish(operation);
+      await this.start('button', id);
+      return;
+    }
     try { operation.release = operation.draft.block('正在重试录音，请完成后再发送。'); }
     catch (error) { this.fail(operation, error); return; }
+    if (!this.current(operation)) { this.release(operation); return; }
     await this.complete(operation, true);
   }
   private async complete(operation: Operation, retry: boolean): Promise<void> {
     if (!operation.recording) return;
     const completion = operation.completion = {};
     const current = () => this.current(operation) && operation.completion === completion;
-    this.update({ phase: 'stopping', holdingAtLimit: false, level: 0, error: null });
+    this.update(operation, { phase: 'stopping', pressing: false, holdingAtLimit: false, level: 0, error: null });
+    if (!current()) return;
     try {
-      const text = await operation.recording[retry ? 'retry' : 'stop'](() => {
-        if (current()) this.update({ phase: 'transcribing' });
+      // stop() releases physical capture synchronously, before another draft may open the microphone.
+      const result = operation.recording[retry ? 'retry' : 'stop'](() => {
+        if (current()) this.update(operation, { phase: 'transcribing' });
       });
+      if (this.capture === operation) this.capture = null;
+      this.notify();
+      const text = await result;
       if (!current()) return;
-      this.finish(operation);
-      const recovery = { ...operation.identity, text };
-      this.update({ phase: 'idle', recovery });
-      const target = this.target;
+      this.update(operation, { phase: 'idle', recovery: { ...operation.identity, text } });
+      this.release(operation);
+      if (!current()) return;
       try {
-        if (!target || !matches(operation.identity, identity(target.draft)) || !this.writable(target)
-          || target.draft.getSnapshot().revision !== operation.revision) {
-          this.update({ notice: '草稿已修改或暂时无法写入。识别结果保留在下方，可复制或手动插入原输入框。' });
+        const target = this.target;
+        const gated = target && matches(operation.identity, identity(target.draft)) && (target.disabled || target.sendBlocked);
+        if (gated || !operation.draft.editTextIfRevision(insertText(operation.text, text, operation.selection), operation.revision)) {
+          this.update(operation, { notice: '草稿已修改或暂时无法写入。识别结果和录音已保留，可复制或手动插入原输入框。' });
           return;
         }
-        operation.draft.editText(insertText(operation.text, text, operation.selection));
+        this.finish(operation);
         const caret = Math.max(0, Math.min(operation.text.length, operation.selection.start)) + text.length;
-        this.focusTarget({ start: caret, end: caret });
-        this.update({ recovery: null, notice: null });
+        this.focusTarget({ start: caret, end: caret }, operation.identity.id);
+        this.notify();
       } catch {
-        this.error(new SpeechError('DRAFT_CONFLICT', '无法修改原输入框，识别结果已保留在下方。'));
+        this.error(operation, new SpeechError('DRAFT_CONFLICT', '无法修改原输入框，识别结果和录音已保留。'));
       }
     } catch (error) { if (current()) this.fail(operation, error); }
   }
-  canInsert(): boolean {
-    if (!this.state.recovery || !this.target || this.disposed || this.operation) return false;
-    try { return matches(this.state.recovery, identity(this.target.draft)) && this.writable(this.target); } catch { return false; }
+  canInsert(id = this.target?.draft.id): boolean {
+    const operation = id ? this.operations.get(id) : undefined;
+    return !!operation?.state.recovery && !this.disposed && this.target?.draft.id === id
+      && matches(operation.identity, identity(this.target.draft)) && this.writable(this.target);
   }
-  insertRecovery(): void {
-    if (!this.canInsert()) return;
+  insertRecovery(id = this.target?.draft.id): void {
+    if (!this.canInsert(id)) return;
     const target = this.target!;
-    const recovery = this.state.recovery!;
+    const operation = this.operations.get(id!)!;
+    const recovery = operation.state.recovery!;
     try {
-      // Explicit recovery inserts at the current caret, never deletes a user's selected text.
-      const selection = target.selection();
-      target.draft.editText(insertText(target.draft.getSnapshot().text, recovery.text, { start: selection.start, end: selection.start }));
-      const caret = selection.start + recovery.text.length;
-      this.focusTarget({ start: caret, end: caret });
-      this.update({ recovery: null, error: null, notice: null });
-    } catch { this.error(new SpeechError('DRAFT_CONFLICT', '无法修改原输入框，请复制已保留的识别结果。')); }
+      const snapshot = target.draft.getSnapshot();
+      const start = Math.max(0, Math.min(snapshot.text.length, target.selection().start));
+      if (!target.draft.editTextIfRevision(insertText(snapshot.text, recovery.text, { start, end: start }), snapshot.revision)) {
+        throw new SpeechError('DRAFT_CONFLICT', '草稿已变化，请重新选择插入位置，或复制识别结果。');
+      }
+      this.finish(operation);
+      const caret = start + recovery.text.length;
+      this.focusTarget({ start: caret, end: caret }, id);
+      this.notify();
+    } catch { this.error(operation, new SpeechError('DRAFT_CONFLICT', '无法修改原输入框，请复制已保留的识别结果。')); }
   }
-  dismiss(): void {
-    if (!this.operation) this.update({ recovery: null, error: null, notice: null });
+  dismiss(id = this.target?.draft.id): void { this.clear(id); }
+  hasRetainedRecording(id = this.target?.draft.id): boolean { return !!(id && this.operations.get(id)?.recording); }
+  clear(id = this.target?.draft.id): void {
+    const operation = id ? this.operations.get(id) : undefined;
+    if (operation) this.finish(operation);
+    if (this.target?.draft.id === id) this.view = idle;
+    this.notify();
   }
-  hasRetainedRecording(): boolean { return !!this.operation?.recording?.retryable(); }
-  clear(): void {
-    if (this.operation) this.finish(this.operation);
-    this.update({ phase: 'idle', pressing: false, elapsedSeconds: 0, holdingAtLimit: false,
-      level: 0, recovery: null, focus: null, error: null, notice: null });
+  notifyCopyFailure(id = this.target?.draft.id, recovery?: Recovery): void {
+    const operation = id ? this.operations.get(id) : undefined;
+    if (operation && (!recovery || operation.state.recovery === recovery)) {
+      this.error(operation, new SpeechError('COPY_FAILED', '无法访问剪贴板，请手动选择并复制识别结果。'));
+    }
   }
-  notifyCopyFailure(): void { this.error(new SpeechError('COPY_FAILED', '无法访问剪贴板，请手动选择并复制识别结果。')); }
-  private error(error: unknown): void {
+  private error(operation: Operation, error: unknown): void {
     const safe = error instanceof SpeechError ? error : new SpeechError('SPEECH_FAILED', '录音或转写失败，请稍后重试。');
-    this.update({ error: safe.message });
+    this.update(operation, { error: safe.message });
   }
   private finish(operation: Operation): void {
-    if (this.operation !== operation) return;
-    this.operation = null;
+    if (this.operations.get(operation.identity.id) !== operation) return;
+    this.operations.delete(operation.identity.id);
+    if (this.capture === operation) this.capture = null;
+    operation.unsubscribe();
     operation.controller.abort();
     operation.preparation?.cancel();
     operation.recording?.cancel();
@@ -243,29 +295,31 @@ export class SpeechService {
   private release(operation: Operation): void {
     const release = operation.release;
     operation.release = () => {};
-    try { release(); } catch { /* Revocation already releases the module's leases. */ }
+    release();
   }
   private fail(operation: Operation, error: unknown): void {
-    if (this.operation !== operation) return;
+    if (!this.current(operation)) return;
+    if (error instanceof SpeechError && error.code === 'AUDIO_TOO_SHORT') {
+      this.finish(operation);
+      if (this.target?.draft.id === operation.identity.id) this.view = idle;
+      this.notify();
+      return;
+    }
     operation.completion = undefined;
-    if (operation.recording?.retryable()) {
-      this.release(operation);
-    } else this.finish(operation);
-    this.update({ phase: 'retry', holdingAtLimit: false, level: 0 });
-    this.error(error);
+    if (this.capture === operation) this.capture = null;
+    this.release(operation);
+    this.update(operation, { phase: 'retry', pressing: false, holdingAtLimit: false, level: 0 });
+    this.error(operation, error);
   }
-  cancel(_notice = '语音输入已取消。'): void {
-    if (!this.operation) return;
-    this.finish(this.operation);
-    this.update({ phase: 'idle', pressing: false, elapsedSeconds: 0, holdingAtLimit: false, level: 0, notice: null, error: null });
-  }
+  cancel(id = this.target?.draft.id): void { this.clear(id); }
   dispose = (): void => {
     if (this.disposed) return;
     this.disposed = true;
-    this.cancel();
+    for (const operation of this.operations.values()) this.finish(operation);
     this.options.signal.removeEventListener('abort', this.dispose);
     this.unsubscribe();
     this.target = null;
+    this.view = idle;
     this.listeners.clear();
   };
 }

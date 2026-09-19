@@ -77,13 +77,22 @@ function fixture() {
   return { env, sockets, prepare, start, grant, stream, track, context, worklet, pcm, errors,
     values: () => ({ stops, closes, captures }) };
 }
-function serviceFixture(f: ReturnType<typeof fixture>) {
+function serviceFixture(f: ReturnType<typeof fixture>, writable = false) {
   let leases = 0;
+  let text = '';
+  let revision = 0;
   const draft: ModuleDraft = {
     id: 'exact-input', sessionId: 's', purpose: { kind: 'prompt' },
     subscribe: () => () => {},
-    getSnapshot: () => ({ text: '', revision: 0, pending: false, unconfirmed: false, hasContent: false, blocks: [] }),
+    getSnapshot: () => ({ text, revision, pending: false, unconfirmed: false, hasContent: !!text, retired: false, blocks: [] }),
     editText: () => assert.fail('Failure must not edit'),
+    editTextIfRevision(value, expected) {
+      assert.equal(writable, true, 'failure must not edit');
+      assert.equal(leases, 0);
+      if (revision !== expected) return false;
+      text = value; revision++;
+      return true;
+    },
     block: () => { leases++; let held = true; return () => { if (held) leases--; held = false; }; },
   };
   const service = new SpeechService({
@@ -94,8 +103,104 @@ function serviceFixture(f: ReturnType<typeof fixture>) {
     prepare: (signal, fail, limit) => prepareRecording(signal, fail, limit, f.env), report: () => assert.fail('No error notification'),
   });
   service.setTarget({ draft, disabled: false, sendBlocked: false, selection: () => ({ start: 0, end: 0 }) });
-  return { service, leases: () => leases };
+  return { service, draft, leases: () => leases };
 }
+
+test('real recorder pipeline seals on navigation, writes a hidden draft and closes one connection per take', async t => {
+  for (const mode of ['button', 'hold'] as const) {
+    const f = fixture(); const s = serviceFixture(f, true);
+    t.after(() => s.service.dispose());
+    const starting = s.service.start(mode); f.grant(f.stream); await starting;
+    f.pcm(1);
+    s.service.clearTarget(s.draft.id);
+    assert.equal(f.track.readyState, 'ended');
+    assert.equal(s.leases(), 1, 'background draft remains blocked until completion');
+    await pump();
+    const socket = f.sockets[0]!;
+    assert.equal(socket.sent.filter(value => value.type === 'input_audio_buffer.commit').length, 1);
+    socket.commit(); socket.final('background result'); await turn();
+    assert.equal(s.draft.getSnapshot().text, 'background result');
+    assert.equal(s.leases(), 0);
+    assert.equal(socket.closed, 1);
+    assert.equal(s.service.hasRetainedRecording(s.draft.id), false);
+  }
+});
+test('a genuinely too-short take interrupted by navigation is discarded without a retry or commit', async t => {
+  const f = fixture(); const s = serviceFixture(f);
+  t.after(() => s.service.dispose());
+  const starting = s.service.start('hold'); f.grant(f.stream); await starting;
+  f.worklet.port.onmessage?.({ data: { type: 'pcm', buffer: new ArrayBuffer(2400) } });
+  s.service.clearTarget(s.draft.id);
+  await pump();
+  assert.equal(s.service.getSnapshot(s.draft.id).phase, 'idle');
+  assert.equal(s.service.hasRetainedRecording(s.draft.id), false);
+  assert.equal(s.leases(), 0);
+  assert.equal(f.sockets[0]!.closed, 1);
+  assert.equal(f.sockets[0]!.sent.some(value => value.type === 'input_audio_buffer.commit'), false);
+});
+test('navigation flush/final timeouts stay with the hidden draft and retry retained PCM without reopening hardware', async t => {
+  t.mock.timers.enable({ apis: ['setTimeout', 'Date'] });
+  for (const stage of ['tail', 'final'] as const) {
+    const f = fixture(); const s = serviceFixture(f, true);
+    const starting = s.service.start('hold'); f.grant(f.stream); await starting;
+    f.pcm(7);
+    if (stage === 'tail') f.worklet.port.postMessage = () => {};
+    s.service.clearTarget(s.draft.id);
+    await turn(); t.mock.timers.tick(25); await turn();
+    // A browser runs microtasks between timer tasks, including after a resumed page's flush deadline.
+    const deadline = stage === 'tail' ? 2001 : 90001;
+    for (let elapsed = 0; elapsed < deadline; elapsed += 20) {
+      t.mock.timers.tick(Math.min(20, deadline - elapsed)); await turn();
+    }
+    const failure = s.service.getSnapshot(s.draft.id);
+    assert.equal(failure.phase, 'retry', stage);
+    assert.match(failure.error!, stage === 'tail' ? /尾部超时/ : /等待转写结果超时/);
+    assert.equal(s.service.hasRetainedRecording(s.draft.id), true);
+    assert.equal(f.track.readyState, 'ended');
+    assert.equal(s.leases(), 0);
+    assert.equal(f.sockets[0]!.closed, 1, 'a failed stop cannot leave an orphan upload running');
+    if (stage === 'tail') assert.equal(f.sockets[0]!.sent.some(value => value.type === 'input_audio_buffer.commit'), false);
+    s.service.setTarget({ draft: s.draft, disabled: false, sendBlocked: false, selection: () => ({ start: 0, end: 0 }) });
+    const retry = s.service.retry();
+    await turn(); t.mock.timers.tick(25); await turn();
+    const socket = f.sockets.at(-1)!;
+    socket.commit(); socket.final('retry result');
+    await retry;
+    assert.equal(s.draft.getSnapshot().text, 'retry result');
+    assert.equal(f.values().captures, 1);
+    assert.equal(f.sockets.length, 2);
+    assert.equal(f.sockets.every(value => value.closed === 1), true);
+    s.service.dispose();
+  }
+});
+test('held-limit flush failure closes its transport before navigation, retaining PCM for retry', async t => {
+  t.mock.timers.enable({ apis: ['setTimeout', 'Date'] });
+  const f = fixture(); const s = serviceFixture(f, true);
+  t.after(() => s.service.dispose());
+  const starting = s.service.start('hold'); f.grant(f.stream); await starting;
+  f.pcm(3); await turn();
+  t.mock.timers.tick(25); await turn();
+  f.worklet.port.postMessage = () => {};
+  t.mock.timers.tick(MAX_SECONDS * 1000); await turn();
+  t.mock.timers.tick(2001); await turn();
+  assert.equal(s.service.getSnapshot().phase, 'retry');
+  assert.match(s.service.getSnapshot().error!, /尾部超时/);
+  assert.equal(s.service.hasRetainedRecording(), true);
+  assert.equal(s.leases(), 0);
+  assert.equal(f.track.readyState, 'ended');
+  assert.equal(f.sockets[0]!.closed, 1);
+  s.service.clearTarget(s.draft.id);
+  t.mock.timers.tick(200_000); await turn();
+  assert.equal(f.sockets[0]!.sent.some(value => value.type === 'input_audio_buffer.commit'), false);
+  assert.equal(f.sockets.length, 1);
+  s.service.setTarget({ draft: s.draft, disabled: false, sendBlocked: false, selection: () => ({ start: 0, end: 0 }) });
+  const retry = s.service.retry();
+  await turn(); t.mock.timers.tick(25); await turn();
+  f.sockets[1]!.commit(); f.sockets[1]!.final('recovered limit');
+  await retry;
+  assert.equal(s.draft.getSnapshot().text, 'recovered limit');
+  assert.equal(f.values().captures, 1);
+});
 
 test('gesture starts microphone independently of unresolved credentials; stopped audio waits without loss', async () => {
   const f = fixture();

@@ -21,8 +21,10 @@ recordings to suppress browser permission prompts.
 
 Failure changes that same button to a red retry icon with an accessible error
 description and tooltip. Click to replay the retained recording; it does not
-open the microphone again. A failed microphone startup or recording shorter
-than 100 ms has no replayable audio, so retry starts a new capture instead.
+open the microphone again. A failed microphone startup has no recording, so retry
+starts a new capture instead. A confirmed `AUDIO_TOO_SHORT` failure (under 100 ms)
+discards the unusable recording and returns to idle, just like cancellation.
+Other failures never silently discard a captured recording.
 There is no automatic retry. The status row displays safe errors; retry remains
 in the microphone button. Its right-hand clear icon cancels pending work and
 destroys this recording, retained transcript and errors without deleting the
@@ -50,9 +52,12 @@ Swipe upward 64 CSS pixels from the initial press to cancel immediately, even
 during startup. Moving back never resumes that press, and release afterward
 cannot submit. Sideways/downward movement and small upward movement do not cancel;
 the initial press still must be in the input, not File/microphone/send buttons.
-Cancellation discards audio rather than retaining it for retry. Capture loss,
-system cancellation, window blur, page hiding, resize, Escape/Tab and input
-replacement also interrupt a hold. Unrelated chat scrolling does not.
+Explicit cancellation (upward swipe, Escape, or clear/discard) destroys audio
+rather than retaining it for retry. Capture loss, system interruption, window
+blur, page hiding, resize, Tab and input replacement instead end capture and
+continue transcription into the original draft. Unrelated chat scrolling does
+not interrupt. Leaving during microphone startup cancels acquisition immediately;
+a late permission grant cannot open a microphone after departure.
 
 At 120 seconds, a held gesture stops capture and retains its bounded audio but
 does not commit or insert anything until release. Swiping up still discards it.
@@ -63,7 +68,8 @@ Focused or nonempty inputs keep native editing. To paste into an empty unfocused
 input, tap first, then use native long-press paste. Keyboard Tab still focuses
 the real textarea; the gesture layer adds no tab stop. The independent microphone
 button remains the accessible alternative and retains its existing behavior.
-Speech 0.3.1 requires Cockpit 0.2.6's additive public UI classes. It uses the
+Speech 0.4.0 requires the paired host's `draftLifecycleVersion: 1` capability
+as well as Cockpit's additive public UI classes. It uses the
 existing `composerEditor` middleware for the full-width status row and leaves
 queue/question layout and scrolling entirely to the host. Input hint size,
 status typography, spacing and alignment are public host classes, not private
@@ -142,10 +148,35 @@ DOM scraping or fetching additional history.
 The `Reference vocabulary:\n` prefix plus context is at most 1,022 code points.
 This prompt and all audio go **directly from the browser to Azure**. Backend
 credential requests contain no user context. Audio, transcripts and credentials
-are never persisted or logged by the module. Audio memory is cleared on success,
-target invalidation, navigation, hiding the page, disconnect or module unload.
-Failed audio stays only for the original live input, until retry or cancellation;
-reload loses it. Cancel cannot retract already-transmitted data or charges.
+are never persisted or logged by the module. Each input draft owns its recording,
+captured insertion point/revision/context, result and error independently. The
+host stores successfully inserted text as an ordinary draft, using its normal
+draft persistence; the module never writes audio to IndexedDB/localStorage.
+
+Switching sessions, replacing prompt with ask, hiding the tab or losing the host
+connection ends capture, but does not cancel transmission or clear failed audio.
+An already-stopped task keeps going and writes back only to its original draft,
+even while that input is absent. Returning to a failed input restores its manual
+retry. Conflicts retain both audio and recognized text until explicit recovery
+or discard. Reliable insertion, explicit discard, authoritative permanent draft
+retirement (an ended decision or deleted session), a confirmed under-100-ms
+recording, or module/page teardown releases the recording. A hidden or unloaded
+session is not a deleted session.
+
+Only one microphone captures at a time. Other drafts' stopped tasks transmit
+independently, without a task-count/concurrency cap or automatic eviction, as
+selected by the user. Each retained two-minute task can use 5.76 MB of raw PCM
+plus overhead, so unresolved drafts can increase memory use. A draft with an
+unfinished/failed task must finish, retry, recover or explicitly discard it before
+starting another recording. Each WebSocket handles one recording; retry creates
+a new connection rather than reusing a connection across drafts.
+
+All retention is confined to the current page/module lifetime: refresh or closing
+the browser/PWA loses it. Browsers can freeze background pages and delay timers,
+uploads or final results. There is no promise of continuous background execution,
+no background microphone keepalive and no automatic retry; after resuming, work
+can complete or expose a retained error for manual retry. Cancel cannot retract
+already-transmitted data or charges.
 
 Retries after an uncertain commit can be billed again. Token caching does not
 raise deployment rate limits. Azure processing, retention, geography and pricing
@@ -172,18 +203,19 @@ initial resume and deliberate stop do not create false failures.
 The exact draft lifetime, session, purpose, revision, selection and context stay
 with the recording. A lease blocks native send while capturing or transcribing,
 and is released on failure, finish or cancellation. Retry reacquires the original
-draft lease. Manual edits win; recovery never follows a replacement input or a
+draft lease. Background completion uses the host's revision-guarded text write,
+which rejects pending/unconfirmed sends, competing leases, retirement and
+persistence errors. Manual edits win; recovery never follows a replacement input or a
 reused request ID. Old connection callbacks and superseded completions cannot
 write text. Azure can reuse a session ID for the same credential, so that ID is
 not used as a local ownership key. Final text must match the committed item.
 
 ## Development and package
 
-Requires Node **24.20.0** and pnpm **10.34.5**. The immutable SDK pin remains
-`d752dd6a016f8ff84235c4cd8850e2b63778bf1b` (`@cockpit/module-api` 0.2.5).
-The host API from waksana/cockpit#52 is already merged; this transport change
-requires no host API change. Frontend API v2/UI v1, `chatWindowVersion: 1` and
-`composerInputVersion: 1` remain independently required.
+Requires Node **24.20.0** and pnpm **10.34.5**. The immutable SDK SHA and package
+version are recorded in `tooling/host-sdk.json`. The paired host change is
+waksana/cockpit#57. Frontend API v2/UI v1, `chatWindowVersion: 1`,
+`composerInputVersion: 1` and `draftLifecycleVersion: 1` are independently required.
 
 ```sh
 node scripts/sdk.mjs prepare /path/to/clean-pinned-cockpit
@@ -192,8 +224,8 @@ pnpm typecheck
 pnpm test
 pnpm build
 # After committing clean source; use a new output directory.
-node scripts/package.mjs module-output-0.3.0
-node scripts/verify-package.mjs module-output-0.3.0/cockpit-speech-0.3.0.tgz
+node scripts/package.mjs module-output-0.4.0
+node scripts/verify-package.mjs module-output-0.4.0/cockpit-speech-0.4.0.tgz
 ```
 
 Archives contain runtime code, worklet assets, licenses and exact source/SDK

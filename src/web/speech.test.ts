@@ -23,10 +23,17 @@ function store<T>(initial: T) {
   };
 }
 function draft(id = 'draft-1', purpose: DraftPurpose = { kind: 'prompt' }): ModuleDraft & { state: ReturnType<typeof store<ModuleDraftSnapshot>> } {
-  const state = store<ModuleDraftSnapshot>({ text: 'hello world', revision: 1, blocks: [], pending: false, unconfirmed: false, hasContent: true });
+  const state = store<ModuleDraftSnapshot>({ text: 'hello world', revision: 1, blocks: [], pending: false, unconfirmed: false, hasContent: true, retired: false });
   return {
     id, sessionId: 's', purpose, ...state, state,
     editText(text) { state.set({ ...state.getSnapshot(), text, revision: state.getSnapshot().revision + 1 }); },
+    editTextIfRevision(text, revision) {
+      const snapshot = state.getSnapshot();
+      if (snapshot.retired) throw new Error('retired');
+      if (snapshot.revision !== revision || snapshot.pending || snapshot.unconfirmed || snapshot.blocks.length) return false;
+      this.editText(text);
+      return true;
+    },
     block(reason) {
       const block = { id: 'speech-lease', reason };
       state.set({ ...state.getSnapshot(), blocks: [...state.getSnapshot().blocks, block] });
@@ -193,7 +200,7 @@ test('manual revisions win and successful text remains recoverable; explicit ins
   const stop = f.service.stop(); f.result.resolve('recognized');
   await stop;
   assert.equal(f.original.getSnapshot().text, 'manual words');
-  assert.equal(f.service.getSnapshot().recovery?.text, 'recognized');
+  assert.equal(f.service.getSnapshot(f.original.id).recovery?.text, 'recognized');
   assert.equal(f.service.canStart(), false);
   assert.equal(f.service.canInsert(), true);
   f.service.insertRecovery();
@@ -207,13 +214,13 @@ test('a recovered result never redirects to another draft, including reused nati
   const stopped = f.service.stop(); f.result.resolve('recognized'); await stopped;
   f.service.clearTarget(f.original.id);
   assert.equal(f.service.getSnapshot().focus, null);
-  assert.equal(f.service.getSnapshot().recovery?.text, 'recognized');
+  assert.equal(f.service.getSnapshot(f.original.id).recovery?.text, 'recognized');
   const replacement = draft('different-lifetime', { kind: 'ask', requestId: 'reused' });
   f.service.setTarget({ draft: replacement, disabled: false, sendBlocked: false, selection: () => ({ start: 0, end: 0 }) });
   assert.equal(f.service.canInsert(), false);
   f.service.insertRecovery();
   assert.equal(replacement.getSnapshot().text, 'hello world');
-  assert.equal(f.service.getSnapshot().recovery?.text, 'recognized');
+  assert.equal(f.service.getSnapshot(f.original.id).recovery?.text, 'recognized');
 });
 test('successful insertion never adds a notice above the editor', async t => {
   const f = fixture();
@@ -272,6 +279,7 @@ test('hold release or upward swipe during permission cancels the lease and every
         phase: () => f.service.getSnapshot().phase,
         start: () => { void f.service.start(); }, stop: () => { void f.service.stop(); },
         cancel: () => f.service.cancel(), focus: () => assert.fail('must not focus on long hold'),
+        interrupt: () => f.service.interrupt(),
       });
       const point = { pointerId: 1, clientX: 20, clientY: 20, button: 0, isPrimary: true };
       gesture.down(point, { setPointerCapture() {}, hasPointerCapture: () => false, releasePointerCapture() {} });
@@ -429,24 +437,42 @@ test('retry preserves original revision/context, ignores superseded completions 
   assert.equal(f.service.getSnapshot().recovery?.text, 'retained recording');
   assert.equal(f.original.getSnapshot().blocks.length, 0);
 });
-test('retained audio is discarded on target replacement, including reused request IDs', async t => {
+test('target replacement hides retained audio without discarding or redirecting it', async t => {
   const f = fixture({ purpose: { kind: 'ask', requestId: 'reused' } }); t.after(() => f.service.dispose());
   await f.service.start(); f.fail(new SpeechError('NETWORK', 'Disconnected'));
   assert.equal(f.service.canRetry(), true);
   f.service.setTarget({ draft: draft('new-lifetime', { kind: 'ask', requestId: 'reused' }),
     disabled: false, sendBlocked: false, selection: () => ({ start: 0, end: 0 }) });
   assert.equal(f.service.canRetry(), false);
-  assert.equal(f.values().cancelled, 1);
+  assert.equal(f.values().cancelled, 0);
   assert.equal(f.original.getSnapshot().blocks.length, 0);
+  assert.equal(f.service.getSnapshot(f.original.id).phase, 'retry');
 });
-test('a failed or too-short capture retries microphone acquisition instead of replaying nonexistent audio', async t => {
+test('an explicit too-short failure discards the unusable take like cancellation', async t => {
   const f = fixture(); t.after(() => f.service.dispose());
   await f.service.start(); f.setRetryable(false);
   f.fail(new SpeechError('AUDIO_TOO_SHORT', 'Too short'));
-  assert.equal(f.service.getSnapshot().phase, 'retry');
-  await f.service.retry();
+  assert.equal(f.service.getSnapshot().phase, 'idle');
+  assert.equal(f.service.hasRetainedRecording(), false);
+  assert.equal(f.service.canRetry(), false);
+  assert.equal(f.original.getSnapshot().blocks.length, 0);
+  await f.service.start();
   assert.equal(f.values().captures, 2);
   assert.equal(f.service.getSnapshot().phase, 'recording');
+});
+test('an unreplayable device failure is not mistaken for a too-short cancellation', async t => {
+  const f = fixture(); t.after(() => f.service.dispose());
+  await f.service.start(); f.setRetryable(false);
+  f.fail(new SpeechError('AUDIO_FAILED', 'Synthetic device failure'));
+  assert.equal(f.service.getSnapshot().phase, 'retry');
+  assert.equal(f.service.hasRetainedRecording(), true);
+  assert.equal(f.service.canRetry(), false);
+  await f.service.retry();
+  assert.equal(f.values().captures, 1);
+  assert.equal(f.values().cancelled, 0);
+  f.service.clear();
+  assert.equal(f.values().cancelled, 1);
+  assert.equal(f.service.canStart(), true);
 });
 
 function turn() { return new Promise<void>(resolve => setImmediate(resolve)); }
