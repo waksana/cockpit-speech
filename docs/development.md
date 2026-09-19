@@ -10,8 +10,8 @@ session quota. `config.ts` rereads bounded regular non-symlink
 `azure-openai.json` files with descriptor/identity checks.
 
 `azure.ts` requests `/openai/v1/realtime/client_secrets` with the server-held key,
-transcription-only configuration, PCM 24 kHz, empty prompt, no automatic turn
-detection and a 600-second credential lifetime. Provider requests reject redirects,
+transcription-only configuration, PCM 24 kHz, empty prompt, `server_vad`
+and a 600-second credential lifetime. Provider requests reject redirects,
 have a 30-second deadline, bound response bodies and discard private errors.
 The returned WebSocket origin/path is locally constructed and strictly validated.
 
@@ -40,14 +40,25 @@ The returned WebSocket origin/path is locally constructed and strictly validated
   recording to 120 seconds. Stop releases tracks immediately, flushes the tail,
   then seals the append-only record. A missing flush acknowledgement fails rather
   than claiming complete audio.
-- `socket.ts` sends prompt configuration and verifies `session.updated` before
-  sending any audio. No context means `prompt: ""`, never omission. The same
-  ordered cursor drains backlog and newly added chunks. Backpressure is bounded,
-  commit follows all chunks, and only a bounded final transcript matching the
-  committed item succeeds. A final arriving before the acknowledgement is held.
+- `socket.ts` sends prompt and server-VAD configuration and verifies
+  `session.updated` before sending audio. No context means `prompt: ""`, never
+  omission. The same ordered cursor drains backlog and newly added chunks;
+  no local silence filtering or cropping occurs. Stop sends final commit then
+  input-buffer clear on the same ordered socket. `input_audio_buffer.cleared`
+  acknowledges the input drain, not transcription completion. A correlated
+  final-commit empty error means no new item; all existing items must still finish.
+  Missing acknowledgements/results time out; rate limits and other errors remain
+  failures. No sleep-based "probably finished" heuristic is used.
+- `transcript.ts` owns one bounded item table per connection. Commit links define
+  ordering, delta appends to that item's text, and completed replaces its text.
+  Every available item's text participates in the composed snapshot even when
+  earlier items have no text yet. Unknown/uncommitted results cannot be written;
+  contradictory links and final results fail. Empty finals are valid.
 - `recorder.ts` owns one capture and one active transport attempt. Network failure
   while recording does not interrupt local capture. Manual retry creates another
   connection/cursor over the same bytes, without reopening the microphone.
+  A failed tail flush aborts the current receiver before the service releases
+  its lease, while keeping bounded PCM available for explicit replay.
   Connections close independently of draft insertion. No automatic reconnect,
   retry, backend audio upload or disk persistence exists.
 - `speech.ts` owns a map of exact draft lifetimes, each with its original
@@ -67,6 +78,15 @@ The returned WebSocket origin/path is locally constructed and strictly validated
   boundaries. On conflict, audio and text remain until manual insertion/discard;
   no hidden textarea lookup or native send is used. The visible target only
   governs starting/retrying, focus and UI projection, never background ownership.
+- Each live composed snapshot replaces the original selected region,
+  advancing only the expected revision from its own write. External revisions,
+  peer blocks and pending/unconfirmed drafts stop automatic updates; the latest
+  composed result stays recoverable. Empty results never delete a selection;
+  an empty final restores an owned provisional replacement. Superseded attempt
+  callbacks cannot affect the new attempt. Clear/cancel preserve text already
+  written, and no messages are submitted automatically.
+  Recovery insertion releases retained audio only after a successful guarded
+  write; displayed recovery controls do not depend on a later successful retry.
 
 Reused credentials may produce equal Azure session IDs despite isolated
 connections. Local object ownership and committed-item matching, not provider
@@ -100,6 +120,10 @@ whole row; it cannot redirect insertion to another draft.
 `hold.ts` owns a single captured pointer and a 300 ms timer. The actual textarea
 stays mounted inside a module-owned flex region. Only an empty, unfocused,
 writable input gets the non-editing overlay; focus/blur chain the native handlers.
+The layer stays mounted for pointer capture while held, but its hint disappears
+during recording so it does not cover live text. Owned speech writes do not
+interrupt the hold; external edits still do. Incremental writes never steal focus
+or reset selection; focus restoration happens only at successful completion.
 The layer is transparent; its hint is leading-aligned and vertically centered. Only while it is
 present does Base receive an empty placeholder, avoiding overlapping hints;
 native placeholder text returns when the layer disappears.
@@ -126,8 +150,10 @@ the hold threshold. Short-tap focus still uses the completed click.
 
 Hold starts pass `waitForStop` to the recording preparation. At the render or wall
 limit capture stops, but the transport queue's sealed view stays false until the
-release or navigation interruption calls stop. Thus a capped buffer cannot
-auto-commit while still held. Upward cancellation clears it even after capture has stopped. The
+release or navigation interruption calls stop. Thus a capped buffer does not initiate the final
+client commit/drain while held; server VAD may already have committed and
+transcribed speech turns. Upward cancellation clears audio and future callbacks
+even after capture has stopped, without undoing already-written draft text. The
 microphone button's limit policy is unchanged.
 
 ## Existing validation tools
@@ -142,8 +168,12 @@ never production configuration or user recordings. They cover:
   backlog, tail flushing, live append order and replay of identical retained data.
 - PCM resampling, short tails, render-sample limit, lifecycle cancellation,
   initial resume, silent readiness failures, devices and bounded waits.
-- Safe provider errors including rate limits, invalid/mismatched/empty results,
+- Safe provider errors including rate limits, invalid/mismatched results,
   stale callbacks, fresh retry cursors, cleanup and actual service lease release.
+- Out-of-order item text, canonical finals, valid empty results, correlated empty
+  final commits, drain acknowledgement before/after results, and all-item completion.
+- Live revision ownership, silent selection preservation, empty-final restoration,
+  late callbacks, whole-audio retry without text duplication and held live updates.
 - Input/status composition, truthful progress, native props/ref/IME preservation,
   exact draft/revision conflicts, retained recovery and no automatic submission.
 - Tap/hold timing, upward swipe despite capture, irreversible cancellation,
@@ -173,3 +203,14 @@ explicit authorization and synthetic audio. Protocol experiments established
 browser ephemeral WebSocket authentication, token reuse/expiry, prompt clearing,
 buffered sending and replay; long-silence recognition produced errors and must
 not be called an accuracy pass. No cloud request is needed for ordinary CI.
+
+For issues #8/#9, deployed capture/PCM/socket/recorder/speech/transport assets
+matched the baseline build. Explicit Chrome input selection restored the user's
+Windows dictation, but silence still caused unwanted text. Authorized synthetic
+Azure probes confirmed nonempty transcripts from all-zero audio with VAD off,
+no turns for tested silence/low noise with VAD on, two automatic turns for two
+utterances, and final manual commit of an active tail. An empty final commit
+arrived before an earlier pending transcript. One attenuated synthetic phrase
+also succeeded; this is not a physical quiet-microphone test. Some probes hit
+rate limits and were stopped, not retried. Real Windows Chrome/PWA acceptance,
+broader noise/short-speech quality and final billing remain unverified.

@@ -24,6 +24,10 @@ interface Operation {
   controller: AbortController; release(): void; unsubscribe(): void;
   state: SpeechSnapshot; recording?: Recording; context?: string;
   preparation?: RecordingPreparation; limited?: boolean; completion?: object;
+  leaseId?: string;
+  transcript: string;
+  appliedText?: string;
+  conflicted: boolean;
 }
 export interface SpeechOptions {
   signal: AbortSignal;
@@ -128,6 +132,44 @@ export class SpeechService {
   private current(operation: Operation): boolean {
     return !this.disposed && this.operations.get(operation.identity.id) === operation && !operation.controller.signal.aborted;
   }
+  ownsDraft(id: string): boolean {
+    const operation = this.operations.get(id);
+    if (!operation || operation.conflicted || operation.appliedText === undefined) return false;
+    const snapshot = operation.draft.getSnapshot();
+    return snapshot.revision === operation.revision && snapshot.text === operation.appliedText;
+  }
+  private captureLease(operation: Operation): void {
+    const blocks = operation.draft.getSnapshot().blocks;
+    operation.leaseId = blocks.length === 1 ? blocks[0]!.id : undefined;
+  }
+  private writeTranscript(operation: Operation, text: string): void {
+    if (!this.current(operation) || operation.state.phase === 'retry' || operation.state.phase === 'idle') return;
+    operation.transcript = text;
+    if (operation.conflicted) return;
+    try {
+      const snapshot = operation.draft.getSnapshot();
+      const target = this.target;
+      const gated = target && matches(operation.identity, identity(target.draft)) && (target.disabled || target.sendBlocked);
+      if (gated || snapshot.retired || snapshot.revision !== operation.revision || snapshot.pending || snapshot.unconfirmed
+        || snapshot.blocks.some(block => block.id !== operation.leaseId)) {
+        operation.conflicted = true; return;
+      }
+      // Silence must not delete the original selection. An empty final can
+      // also retract this attempt's provisional text without losing that selection.
+      if (!text && operation.appliedText === undefined) return;
+      const next = text ? insertText(operation.text, text, operation.selection) : operation.text;
+      if (snapshot.text !== next) operation.draft.editText(next);
+      const updated = operation.draft.getSnapshot();
+      if (updated.text !== next || updated.revision !== snapshot.revision + (snapshot.text !== next ? 1 : 0)) {
+        operation.conflicted = true; return;
+      }
+      operation.revision = updated.revision;
+      operation.appliedText = next;
+    } catch {
+      operation.conflicted = true;
+      this.error(operation, new SpeechError('DRAFT_CONFLICT', '无法修改原输入框，识别结果将保留供恢复。'));
+    }
+  }
   async start(mode: 'button' | 'hold' = 'button', id = this.target?.draft.id): Promise<void> {
     if (!this.canStart(id)) return;
     const target = this.target!;
@@ -136,6 +178,7 @@ export class SpeechService {
       identity: identity(target.draft), draft: target.draft, revision: snapshot.revision,
       text: snapshot.text, selection: target.selection(), controller: new AbortController(),
       release: () => {}, unsubscribe: () => {}, state: { ...idle, phase: 'permission' },
+      transcript: '', conflicted: false,
     };
     this.operations.set(operation.identity.id, operation);
     this.capture = operation;
@@ -149,6 +192,7 @@ export class SpeechService {
     try {
       operation.context = recentContext(this.options.host.getSnapshot(), this.options.chatWindow.getSnapshot(), target.draft.sessionId);
       operation.release = target.draft.block('正在录音或转写，请完成后再发送。');
+      this.captureLease(operation);
       // A synchronous host notification can retire or interrupt the owner while acquiring its lease.
       if (!this.current(operation)) { this.release(operation); return; }
       this.notify();
@@ -166,6 +210,7 @@ export class SpeechService {
             this.update(operation, { level: value, elapsedSeconds: Math.min(120, Math.floor(seconds)) });
           }
         },
+        onText: text => this.writeTranscript(operation, text),
       });
       if (!this.current(operation)) { recording.cancel(); return; }
       operation.recording = recording;
@@ -192,7 +237,7 @@ export class SpeechService {
   }
   canRetry(id = this.target?.draft.id): boolean {
     const operation = id ? this.operations.get(id) : undefined;
-    return !!operation && operation.state.phase === 'retry' && !this.disposed && this.target?.draft.id === id
+    return !!operation && operation.state.phase === 'retry' && !this.disposed && !!this.target && this.target.draft.id === id
       && this.writable(this.target) && (operation.recording ? operation.recording.retryable() : !this.capture);
   }
   async retry(id = this.target?.draft.id): Promise<void> {
@@ -203,7 +248,10 @@ export class SpeechService {
       await this.start('button', id);
       return;
     }
-    try { operation.release = operation.draft.block('正在重试录音，请完成后再发送。'); }
+    try {
+      operation.release = operation.draft.block('正在重试录音，请完成后再发送。');
+      this.captureLease(operation);
+    }
     catch (error) { this.fail(operation, error); return; }
     if (!this.current(operation)) { this.release(operation); return; }
     await this.complete(operation, true);
@@ -212,7 +260,7 @@ export class SpeechService {
     if (!operation.recording) return;
     const completion = operation.completion = {};
     const current = () => this.current(operation) && operation.completion === completion;
-    this.update(operation, { phase: 'stopping', pressing: false, holdingAtLimit: false, level: 0, error: null });
+    this.update(operation, { phase: 'stopping', pressing: false, holdingAtLimit: false, level: 0, error: null, recovery: null });
     if (!current()) return;
     try {
       // stop() releases physical capture synchronously, before another draft may open the microphone.
@@ -229,13 +277,18 @@ export class SpeechService {
       try {
         const target = this.target;
         const gated = target && matches(operation.identity, identity(target.draft)) && (target.disabled || target.sendBlocked);
-        if (gated || !operation.draft.editTextIfRevision(insertText(operation.text, text, operation.selection), operation.revision)) {
+        const next = text ? insertText(operation.text, text, operation.selection) : operation.text;
+        if (gated || operation.conflicted || !operation.draft.editTextIfRevision(next, operation.revision)) {
           this.update(operation, { notice: '草稿已修改或暂时无法写入。识别结果和录音已保留，可复制或手动插入原输入框。' });
           return;
         }
         this.finish(operation);
-        const caret = Math.max(0, Math.min(operation.text.length, operation.selection.start)) + text.length;
-        this.focusTarget({ start: caret, end: caret }, operation.identity.id);
+        if (text) {
+          const caret = Math.max(0, Math.min(operation.text.length, operation.selection.start)) + text.length;
+          this.focusTarget({ start: caret, end: caret }, operation.identity.id);
+        } else if (this.target?.draft.id === operation.identity.id) {
+          this.view = { ...idle, notice: '未识别到语音，草稿未被替换。' };
+        }
         this.notify();
       } catch {
         this.error(operation, new SpeechError('DRAFT_CONFLICT', '无法修改原输入框，识别结果和录音已保留。'));
@@ -244,7 +297,8 @@ export class SpeechService {
   }
   canInsert(id = this.target?.draft.id): boolean {
     const operation = id ? this.operations.get(id) : undefined;
-    return !!operation?.state.recovery && !this.disposed && this.target?.draft.id === id
+    return !!operation?.state.recovery && !this.disposed && !!this.target && this.target.draft.id === id
+      && (operation.state.phase === 'idle' || operation.state.phase === 'retry')
       && matches(operation.identity, identity(this.target.draft)) && this.writable(this.target);
   }
   insertRecovery(id = this.target?.draft.id): void {
@@ -308,7 +362,8 @@ export class SpeechService {
     operation.completion = undefined;
     if (this.capture === operation) this.capture = null;
     this.release(operation);
-    this.update(operation, { phase: 'retry', pressing: false, holdingAtLimit: false, level: 0 });
+    this.update(operation, { phase: 'retry', pressing: false, holdingAtLimit: false, level: 0,
+      recovery: operation.conflicted && operation.transcript ? { ...operation.identity, text: operation.transcript } : null });
     this.error(operation, error);
   }
   cancel(id = this.target?.draft.id): void { this.clear(id); }

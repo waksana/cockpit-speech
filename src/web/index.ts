@@ -45,7 +45,7 @@ export const activate: ActivateFrontend = context => {
     const state = useSpeech(id);
     React.useSyncExternalStore(context.state.host.subscribe, context.state.host.getSnapshot);
     const preparing = state.phase === 'permission' || (state.phase === 'idle' && state.pressing);
-    if (state.phase === 'idle' && !state.recovery && !preparing) return null;
+    if (state.phase === 'idle' && !state.recovery && !state.notice && !preparing) return null;
     const recording = state.phase === 'recording';
     const capturing = recording && !state.holdingAtLimit;
     const processing = state.phase === 'stopping' || state.phase === 'transcribing';
@@ -56,8 +56,8 @@ export const activate: ActivateFrontend = context => {
     const label = retry ? `${state.error ?? '语音失败。'}${retryHint}`
       : preparing ? '正在准备录音…'
         : state.recovery ? '识别结果未写入草稿，请在下方恢复。'
-          : recording ? (state.holdingAtLimit ? '已达两分钟，松手转写' : '正在录音')
-            : '正在处理录音…';
+          : recording ? (state.holdingAtLimit ? '已达两分钟，松手结束录音' : '正在录音')
+            : state.notice ?? '正在处理录音…';
     const time = `${String(Math.floor(state.elapsedSeconds / 60)).padStart(2, '0')}:${String(state.elapsedSeconds % 60).padStart(2, '0')}`;
     return h('div', { className: `ck-input-status ck-status-text cockpit-speech-status ${capturing || retry ? 'ck-danger' : 'ck-text-secondary'}` },
       h('span', { className: 'ck-status-marker', 'aria-hidden': true },
@@ -149,9 +149,9 @@ export const activate: ActivateFrontend = context => {
           };
         }, [gesture, draft.id]);
         React.useLayoutEffect(() => {
-          if (focused || props.value !== '' || snapshot.text !== '' || props.disabled || props.sendBlocked
+          if (focused || ((props.value !== '' || snapshot.text !== '') && !speech.ownsDraft(draft.id)) || props.disabled || props.sendBlocked
             || !host.visible || !host.connected || host.sessionId !== draft.sessionId) gesture.interrupt();
-        }, [gesture, focused, props.value, snapshot.text, props.disabled, props.sendBlocked, host, draft.sessionId]);
+        }, [gesture, focused, props.value, snapshot.text, props.disabled, props.sendBlocked, host, draft.id, draft.sessionId]);
         const selection = React.useCallback(() => ({
           start: input.current?.selectionStart ?? draft.getSnapshot().text.length,
           end: input.current?.selectionEnd ?? draft.getSnapshot().text.length,
@@ -171,7 +171,7 @@ export const activate: ActivateFrontend = context => {
         const retry = state.phase === 'retry';
         const active = state.phase !== 'idle' && !retry;
         const busy = active && state.phase !== 'recording';
-        const label = state.phase === 'recording' ? (state.holdingAtLimit ? '录音已达两分钟，松手转写' : '停止录音并转写')
+        const label = state.phase === 'recording' ? (state.holdingAtLimit ? '录音已达两分钟，松手结束录音' : '停止录音并收取剩余文字')
           : state.phase === 'permission' ? '正在启动麦克风'
               : state.phase === 'stopping' ? '正在提交录音'
                 : state.phase === 'transcribing' ? '正在转写录音'
@@ -211,7 +211,7 @@ export const activate: ActivateFrontend = context => {
               onContextMenu: event => event.preventDefault(),
               // Keep the touch target mounted through release; focus in the completed click gesture.
               onClick: event => { event.preventDefault(); gesture.click(); },
-            }, '轻点输入，按住说话') : null,
+            }, holding && active ? '' : '轻点输入，按住说话') : null,
           ), button,
         );
       },

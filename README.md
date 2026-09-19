@@ -30,9 +30,14 @@ in the microphone button. Its right-hand clear icon cancels pending work and
 destroys this recording, retained transcript and errors without deleting the
 existing draft. Late completions cannot restore cleared results.
 
-`gpt-transcribe` recognizes the committed audio turn, not live captions or a
-duplex conversation. Successful text is inserted at the original selection,
-never sent automatically. If the draft changed, its text is not overwritten:
+Azure server VAD detects speech and automatically commits turns while the
+browser continues recording and uploading the complete PCM stream. `gpt-transcribe`
+starts recognition after each turn is committed, not necessarily while a
+continuous sentence is still being spoken. Text deltas update the original
+selection as they arrive; each final transcript replaces that turn's provisional
+text rather than appending it again. All available turns are composed in speech
+order, even if earlier turns are still empty. Late earlier text can move later
+text to the right. Nothing is sent automatically. If the draft changed, its text is not overwritten:
 the separate result recovery field offers copy, explicit insertion at the
 current caret, or discard. Only this conflict recovery adds a result panel.
 
@@ -43,7 +48,8 @@ An empty, unfocused, writable input displays a non-editing gesture layer:
 native selection/paste. Pressing immediately shows preparation feedback, but
 microphone acquisition still starts only after 300 ms. Once ready, the status
 row's red dot changes size with captured volume; the button is a static red stop
-square. Release to transcribe into the original draft, never send a message.
+square. Text can appear while held. Release stops capture, uploads its remaining
+tail and waits for outstanding transcription, never sending a message.
 Release before readiness cancels instead. Clicking the microphone uses the
 same status row and clicking the stop square ends capture.
 There is no full-screen shade or parallel editor.
@@ -53,27 +59,29 @@ during startup. Moving back never resumes that press, and release afterward
 cannot submit. Sideways/downward movement and small upward movement do not cancel;
 the initial press still must be in the input, not File/microphone/send buttons.
 Explicit cancellation (upward swipe, Escape, or clear/discard) destroys audio
-rather than retaining it for retry. Capture loss, system interruption, window
+rather than retaining it for retry and stops future text updates; already-written
+draft text is preserved, not automatically undone. Capture loss, system interruption, window
 blur, page hiding, resize, Tab and input replacement instead end capture and
 continue transcription into the original draft. Unrelated chat scrolling does
 not interrupt. Leaving during microphone startup cancels acquisition immediately;
 a late permission grant cannot open a microphone after departure.
 
-At 120 seconds, a held gesture stops capture and retains its bounded audio but
-does not commit or insert anything until release. Swiping up still discards it.
-The independent microphone button keeps its existing automatic
-stop-and-transcribe behavior at the same limit.
+At 120 seconds, a held gesture stops capture and retains its bounded audio until
+release triggers the final input drain. Azure may already have committed turns
+and returned text while held. Swiping up discards retained audio and stops future
+updates, but cannot undo provider processing or charges. The independent
+microphone button automatically stops and drains at the same limit.
 
 Focused or nonempty inputs keep native editing. To paste into an empty unfocused
 input, tap first, then use native long-press paste. Keyboard Tab still focuses
 the real textarea; the gesture layer adds no tab stop. The independent microphone
 button remains the accessible alternative and retains its existing behavior.
-Speech 0.4.0 requires the paired host's `draftLifecycleVersion: 1` capability
+Speech 0.5.0 requires the paired host's `draftLifecycleVersion: 1` capability
 as well as Cockpit's additive public UI classes. It uses the
 existing `composerEditor` middleware for the full-width status row and leaves
 queue/question layout and scrolling entirely to the host. Input hint size,
 status typography, spacing and alignment are public host classes, not private
-host selectors or separately exported font variables. The backend is unchanged.
+host selectors or separately exported font variables.
 
 The layer suppresses selection and touch callouts rather than intercepting a
 long press on an editable textarea. This is not a claim of iOS Safari/PWA
@@ -83,6 +91,20 @@ cannot complete while held, release safely and use the microphone button.
 In particular, iOS home-screen web apps may ask for microphone permission again.
 The browser owns permission persistence; the module cannot promise permanent
 authorization and deliberately releases the microphone after stop/cancel.
+
+### Windows Chrome input troubleshooting
+
+Microphone permission and an active recording indicator do not prove that the
+selected input contains speech. Check the input meter in Windows Settings >
+System > Sound, then explicitly select the same working microphone in
+`chrome://settings/content/microphone` and reload Cockpit. Chrome's previous
+default input can differ from the working device, including after attaching a
+wireless receiver. No device names, IDs, audio or transcripts need to be shared.
+
+For the reported desktop incident, explicitly selecting Chrome's microphone
+restored dictation. Silence still produced text afterward, which is a separate
+provider-input handling issue. This release does not claim to fix Windows
+drivers, change the system default microphone or prove all physical devices work.
 
 ## File-only configuration
 
@@ -128,14 +150,25 @@ The browser starts capture while obtaining credentials and opening a WebSocket.
 A packaged AudioWorklet records mono PCM16 at 24 kHz into an append-only memory
 record (at most 120 seconds / 5.76 MB of raw audio). Each connection first sends
 `session.update`, including this recording's prompt or an explicit empty prompt,
-and checks the effective configuration in `session.updated`. Only then does it
+and `server_vad`, and checks the effective configuration in `session.updated`. Only then does it
 send the backlog and new chunks with bounded WebSocket backpressure.
 
 Stop immediately releases the microphone, flushes the worklet's tail, sends all
-remaining chunks and commits once. Stop is also valid before the network is
-ready. On failure, sent chunks are still retained. Manual retry uses a new
+remaining chunks and sends one final commit. A following input-buffer clear
+acknowledgement drains ordered input operations, not the asynchronous transcriptions.
+The connection remains open until every committed item has a final result.
+An empty-buffer error is normal only when correlated to that final commit.
+No speech/empty final text leaves the original selection intact and displays a
+safe status notice; it is not treated as a retryable protocol error.
+Stop is also valid before the network is ready. On failure, sent chunks are still retained. Manual retry uses a new
 connection and a cursor at the beginning of the same recording, with the same
-captured context; it never appends ambiguously to a failed connection.
+captured context and a fresh item table. Results replace the same owned draft
+region instead of duplicating previously written text. A manual draft edit
+disables further automatic replacement and retains the latest result for recovery.
+If tail capture fails, its receiver is aborted before the draft is unblocked;
+only an explicit retry can resume updates. Inserting or discarding a partial
+recovery result also ends its retained retry operation, so those controls never
+leave hidden replay work behind.
 
 The excerpt is the **last 1,000 Unicode code points** of the newest eligible
 completed root assistant reply, captured at the first click. Eligibility needs
@@ -181,8 +214,12 @@ already-transmitted data or charges.
 Retries after an uncertain commit can be billed again. Token caching does not
 raise deployment rate limits. Azure processing, retention, geography and pricing
 follow the resource/model terms; Global deployments are not a promise of local
-processing. Recognition can be incorrect, including hallucinations during
-silence. There is no second model or local rewriting pass.
+processing. Server VAD avoids transcription of tested silence, but can still
+misclassify noise or miss quiet speech; it is not a guarantee against hallucination.
+All PCM, including silence, still reaches Azure. There is no local VAD model,
+fixed local amplitude cutoff, prompt-equality filter or rewriting pass.
+VAD can create multiple billable turns before the user stops; response usage is
+not a substitute for the Azure bill.
 
 ## Browser and draft safety
 
@@ -224,8 +261,8 @@ pnpm typecheck
 pnpm test
 pnpm build
 # After committing clean source; use a new output directory.
-node scripts/package.mjs module-output-0.4.0
-node scripts/verify-package.mjs module-output-0.4.0/cockpit-speech-0.4.0.tgz
+node scripts/package.mjs module-output-0.5.0
+node scripts/verify-package.mjs module-output-0.5.0/cockpit-speech-0.5.0.tgz
 ```
 
 Archives contain runtime code, worklet assets, licenses and exact source/SDK

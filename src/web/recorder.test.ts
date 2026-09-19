@@ -40,6 +40,7 @@ function fixture() {
     bufferedAmount = 0;
     closed = 0;
     autoConfig = true;
+    autoClear = true;
     sent: Record<string, unknown>[] = [];
     send(raw: string) {
       const message = JSON.parse(raw);
@@ -48,7 +49,12 @@ function fixture() {
     }
     close() { this.closed++; }
     emit(type: string, value = {}) { this.onmessage?.({ data: JSON.stringify({ type, ...value }) }); }
-    commit() { this.emit('input_audio_buffer.committed', { item_id: 'same-provider-id' }); }
+    commit() {
+      this.emit('input_audio_buffer.committed', { item_id: 'same-provider-id', previous_item_id: null });
+      if (this.autoClear && this.sent.some(m => m.type === 'input_audio_buffer.clear')) {
+        queueMicrotask(() => this.emit('input_audio_buffer.cleared'));
+      }
+    }
     final(transcript = 'recognized', item_id = 'same-provider-id') {
       this.emit('conversation.item.input_audio_transcription.completed', { item_id, content_index: 0, transcript });
     }
@@ -85,7 +91,7 @@ function serviceFixture(f: ReturnType<typeof fixture>, writable = false) {
     id: 'exact-input', sessionId: 's', purpose: { kind: 'prompt' },
     subscribe: () => () => {},
     getSnapshot: () => ({ text, revision, pending: false, unconfirmed: false, hasContent: !!text, retired: false, blocks: [] }),
-    editText: () => assert.fail('Failure must not edit'),
+    editText: value => { assert.ok(writable, 'Failure must not edit'); text = value; revision++; },
     editTextIfRevision(value, expected) {
       assert.equal(writable, true, 'failure must not edit');
       assert.equal(leases, 0);
@@ -216,7 +222,7 @@ test('gesture starts microphone independently of unresolved credentials; stopped
   await turn(); assert.equal(f.sockets.length, 0);
   issue(credential()); await pump();
   const socket = f.sockets[0]!;
-  assert.deepEqual(socket.sent.map(m => m.type), ['session.update', 'input_audio_buffer.append', 'input_audio_buffer.append', 'input_audio_buffer.commit']);
+  assert.deepEqual(socket.sent.map(m => m.type), ['session.update', 'input_audio_buffer.append', 'input_audio_buffer.append', 'input_audio_buffer.commit', 'input_audio_buffer.clear']);
   const update = socket.sent[0] as { session: { audio: { input: { transcription: { prompt: string } } } } };
   assert.equal(update.session.audio.input.transcription.prompt, 'Reference vocabulary:\ncaptured context');
   socket.final(); socket.commit();
@@ -239,6 +245,78 @@ test('prompt is confirmed before audio, including explicit empty context on cach
   socket.commit(); socket.final(); await stop; recording.cancel();
   for (const text of ['a'.repeat(1000), '😀'.repeat(1000)]) assert.equal([...transcriptionPrompt(text)].length, 1022);
   assert.throws(() => transcriptionPrompt('a'.repeat(1001)));
+});
+test('VAD streams every available item in order while recording and drains after final empty commit', async () => {
+  const f = fixture(); const texts: string[] = [];
+  const starting = f.prepare().start(async () => credential(), 'original context', { waitForStop: true, onText: text => texts.push(text) });
+  f.grant(f.stream); const recording = await starting; f.pcm(); await pump();
+  const socket = f.sockets[0]!; socket.autoClear = false;
+  for (const [item_id, previous_item_id] of [['A', null], ['B', 'A'], ['C', 'B']]) socket.emit('input_audio_buffer.committed', { item_id, previous_item_id });
+  const delta = (item_id: string, delta: string) => socket.emit('conversation.item.input_audio_transcription.delta', { item_id, content_index: 0, delta });
+  delta('C', 'third'); delta('A', 'first '); socket.final('second ', 'B');
+  assert.deepEqual(texts, ['third', 'first third', 'first second third']);
+  assert.equal(socket.sent.filter(m => m.type === 'input_audio_buffer.commit').length, 0);
+  let finished = false;
+  const stopped = recording.stop().then(text => { finished = true; return text; }); await pump();
+  const stop = socket.sent.find(m => m.type === 'input_audio_buffer.commit')!;
+  socket.emit('error', { error: { code: 'input_audio_buffer_commit_empty', event_id: stop.event_id } });
+  socket.emit('input_audio_buffer.cleared'); await turn();
+  assert.equal(finished, false);
+  assert.equal(socket.closed, 0);
+  socket.final('First ', 'A'); await turn();
+  assert.equal(finished, false);
+  socket.final('third.', 'C');
+  assert.equal(await stopped, 'First second third.');
+  assert.equal(socket.closed, 1);
+  assert.equal(texts.at(-1), 'First second third.');
+  recording.cancel();
+});
+test('final results cannot close the socket before input drain acknowledgement', async () => {
+  const f = fixture(); const recording = await f.start(); f.pcm(); await pump();
+  const socket = f.sockets[0]!; socket.autoClear = false;
+  socket.commit(); socket.final('already returned');
+  const stopped = recording.stop(); await pump();
+  assert.equal(socket.closed, 0);
+  socket.emit('error', { error: { code: 'input_audio_buffer_commit_empty', event_id: 'speech-final-commit' } });
+  assert.equal(socket.closed, 0);
+  socket.emit('input_audio_buffer.cleared');
+  assert.equal(await stopped, 'already returned'); recording.cancel();
+});
+test('silence and legitimate empty transcripts complete without prompt substitution or replay', async () => {
+  for (const emptyItem of [true, false]) {
+    const f = fixture(); const recording = await f.start('synthetic prompt');
+    f.pcm(0); const stopped = recording.stop(); await pump();
+    const socket = f.sockets[0]!; socket.autoClear = false;
+    if (emptyItem) { socket.commit(); socket.final(' '); }
+    else socket.emit('error', { error: { code: 'input_audio_buffer_commit_empty', event_id: 'speech-final-commit' } });
+    socket.emit('input_audio_buffer.cleared');
+    assert.equal(await stopped, '');
+    assert.equal(socket.closed, 1); recording.cancel();
+  }
+});
+test('uncorrelated empty commits, unknown late items and missing commit outcomes are protocol failures', async () => {
+  for (const cause of ['uncorrelated', 'unknown', 'missing']) {
+    const f = fixture(); const recording = await f.start(); f.pcm();
+    const stopped = recording.stop(); const rejected = assert.rejects(stopped); await pump();
+    const socket = f.sockets[0]!; socket.autoClear = false;
+    if (cause === 'uncorrelated') socket.emit('error', { error: { code: 'input_audio_buffer_commit_empty', event_id: 'unrelated' } });
+    if (cause === 'unknown') { socket.commit(); socket.emit('input_audio_buffer.cleared'); socket.final('wrong', 'unknown'); }
+    if (cause === 'missing') socket.emit('input_audio_buffer.cleared');
+    await rejected; assert.equal(socket.closed, 1); recording.cancel();
+  }
+});
+test('replay publishes fresh snapshots and ignores callbacks from the abandoned attempt', async () => {
+  const f = fixture(); const texts: string[] = [];
+  const starting = f.prepare().start(async () => credential(), undefined, { waitForStop: false, onText: text => texts.push(text) });
+  f.grant(f.stream); const recording = await starting; f.pcm(); await pump();
+  const old = f.sockets[0]!; const late = old.onmessage;
+  old.commit(); old.final('partial');
+  old.onclose?.(); await assert.rejects(recording.stop());
+  const retry = recording.retry(); await pump();
+  late?.({ data: JSON.stringify({ type: 'conversation.item.input_audio_transcription.delta', item_id: 'same-provider-id', content_index: 0, delta: 'stale' }) });
+  const next = f.sockets[1]!; next.commit(); next.final('fresh');
+  assert.equal(await retry, 'fresh');
+  assert.deepEqual(texts, ['partial', 'fresh']); recording.cancel();
 });
 test('live levels come from captured PCM without changing buffered bytes or surviving cancellation', async () => {
   const f = fixture(); const levels: number[] = [];
@@ -334,6 +412,31 @@ test('late audio-context cleanup failure cannot abort a newer replay attempt', a
   assert.equal(socket.closed, 0);
   socket.commit(); socket.final();
   assert.equal(await replay, 'recognized'); recording.cancel();
+});
+test('failed tail flush aborts the old receiver before releasing the lease, while retaining replay audio', async t => {
+  t.mock.timers.enable({ apis: ['setTimeout'] });
+  const f = fixture(); const s = serviceFixture(f, true);
+  t.after(() => s.service.dispose());
+  const started = s.service.start(); f.grant(f.stream); await started;
+  f.pcm(); await turn(); t.mock.timers.tick(25); await turn();
+  const old = f.sockets[0]!; const late = old.onmessage; old.autoClear = false;
+  old.commit();
+  old.emit('conversation.item.input_audio_transcription.delta', { item_id: 'same-provider-id', content_index: 0, delta: 'partial' });
+  assert.equal(s.draft.getSnapshot().text, 'partial');
+  f.worklet.port.postMessage = () => {};
+  const stopped = s.service.stop();
+  t.mock.timers.tick(2001); await stopped; await turn();
+  assert.equal(s.service.getSnapshot().phase, 'retry');
+  assert.equal(s.leases(), 0);
+  assert.equal(old.closed, 1);
+  late?.({ data: JSON.stringify({ type: 'conversation.item.input_audio_transcription.completed',
+    item_id: 'same-provider-id', content_index: 0, transcript: 'LATE FINAL' }) });
+  assert.equal(s.draft.getSnapshot().text, 'partial');
+  assert.equal(s.service.hasRetainedRecording(), true);
+  const replay = s.service.retry(); await turn(); t.mock.timers.tick(25); await turn();
+  const next = f.sockets[1]!; next.commit(); next.final('fresh replay'); await replay;
+  assert.equal(s.draft.getSnapshot().text, 'fresh replay');
+  assert.equal(s.leases(), 0);
 });
 test('device/context failures during initialization and capture release service leases; audio may remain retryable', async () => {
   for (const stage of ['initialization', 'recording']) for (const cause of ['track', 'context']) {
@@ -484,14 +587,13 @@ test('permission, resume, worklet, connection, tail, backpressure and final wait
     assert.equal(f.values().closes, 1, stage); s.service.dispose();
   }
 });
-test('provider errors, wrong/oversized/empty results and mismatched effective prompts cannot write a result', async () => {
-  for (const cause of ['rate-limit', 'wrong-item', 'empty', 'oversized', 'prompt']) {
+test('provider errors, wrong/oversized results and mismatched effective prompts cannot write a result', async () => {
+  for (const cause of ['rate-limit', 'wrong-item', 'oversized', 'prompt']) {
     const f = fixture(); const recording = await f.start(); f.pcm();
     const stop = recording.stop(); const rejected = assert.rejects(stop); await pump();
     const socket = f.sockets[0]!;
     if (cause === 'rate-limit') socket.emit('conversation.item.input_audio_transcription.failed', { error: { code: 'RateLimitReached' } });
     if (cause === 'wrong-item') { socket.commit(); socket.final('text', 'other'); }
-    if (cause === 'empty') socket.final(' ');
     if (cause === 'oversized') socket.final('x'.repeat(MAX_TEXT_POINTS + 1));
     if (cause === 'prompt') socket.emit('session.updated', { session: {} });
     await rejected; assert.equal(socket.closed, 1); recording.cancel();

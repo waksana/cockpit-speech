@@ -59,6 +59,7 @@ function fixture(t: TestContext) {
     replay: ReturnType<typeof deferred<string>>; recording: Recording;
     stops: number; retries: number; cancels: number; hardware: boolean;
     fail(error: SpeechError): void; level(value: number, seconds: number): void;
+    text(value: string): void;
   }[] = [];
   let delayPermission = false;
   let delayFlush = false;
@@ -71,6 +72,7 @@ function fixture(t: TestContext) {
         replay: deferred<string>(), recording: {} as Recording,
         stops: 0, retries: 0, cancels: 0, hardware: true, fail,
         level: (_value: number, _seconds: number) => {},
+        text: (_value: string) => {},
       };
       take.recording = {
         stop: async committed => {
@@ -89,6 +91,7 @@ function fixture(t: TestContext) {
         cancel() { take.hardware = false; },
         async start(_session, _context, options) {
           take.level = options?.onLevel ?? take.level;
+          take.text = options?.onText ?? take.text;
           return delayPermission ? take.permission.promise : take.recording;
         },
       };
@@ -229,6 +232,54 @@ test('returning to a failed draft restores only its retry and cannot replace it 
   await retry; await turn();
   assert.equal(f.original.draft.getSnapshot().text, 'before original after');
   assert.equal(answer.draft.getSnapshot().text, 'before answer after');
+});
+
+test('streamed text and retry replace only the original region after ask/session navigation', async t => {
+  for (const cause of ['ask', 'session'] as const) {
+    const f = fixture(t);
+    await f.service.start('hold');
+    const first = f.takes[0]!;
+    first.text('early ');
+    assert.equal(f.original.draft.getSnapshot().text, 'before early after');
+    const next = depart(f, cause);
+    await f.service.start();
+    const second = f.takes[1]!;
+    first.text('background ');
+    second.text('other ');
+    assert.equal(f.original.draft.getSnapshot().text, 'before background after');
+    assert.equal(next.draft.getSnapshot().text, 'before other after');
+    await turn();
+    first.result.reject(new SpeechError('NETWORK', 'Background failed')); await turn();
+    first.text('late failed callback ');
+    assert.equal(f.original.draft.getSnapshot().text, 'before background after');
+    f.select(f.original);
+    const replay = f.service.retry();
+    first.text('replayed ');
+    assert.equal(f.original.draft.getSnapshot().text, 'before replayed after');
+    first.replay.resolve('final ');
+    second.result.resolve('other final ');
+    await replay; await turn();
+    assert.equal(f.original.draft.getSnapshot().text, 'before final after');
+    assert.equal(next.draft.getSnapshot().text, 'before other final after');
+    first.text('late success ');
+    assert.equal(f.original.draft.getSnapshot().text, 'before final after');
+  }
+});
+
+test('successful provisional writes do not release audio if the final durable checkpoint fails', async t => {
+  const f = fixture(t);
+  await f.service.start();
+  const take = f.takes[0]!;
+  take.text('live ');
+  f.original.rejectWrite();
+  depart(f, 'ask');
+  take.result.resolve('live ');
+  await turn();
+  assert.equal(f.original.draft.getSnapshot().text, 'before live after');
+  assert.equal(f.service.hasRetainedRecording('prompt'), true);
+  assert.equal(f.service.getSnapshot('prompt').recovery?.text, 'live ');
+  assert.match(f.service.getSnapshot('prompt').error!, /无法修改/);
+  assert.equal(take.signal.aborted, false);
 });
 
 test('revision, send and write failures retain both text and audio until explicit insertion or discard', async t => {

@@ -12,7 +12,11 @@ export interface Recording {
   cancel(): void;
 }
 export interface RecordingPreparation {
-  start(session: CreateSession, context?: string, options?: { waitForStop: boolean; onLevel?(value: number, seconds: number): void }): Promise<Recording>;
+  start(session: CreateSession, context?: string, options?: {
+    waitForStop: boolean;
+    onLevel?(value: number, seconds: number): void;
+    onText?(text: string): void;
+  }): Promise<Recording>;
   cancel(): void;
 }
 export type PrepareRecording = (signal: AbortSignal, fail: (error: SpeechError) => void, limit: () => void) => RecordingPreparation;
@@ -68,7 +72,8 @@ export function prepareRecording(
         return (async () => {
           const credential = await session(requestSignal, refresh);
           requestSignal.throwIfAborted();
-          return transcribe(credential, context, queue, requestSignal, () => onCommit?.(), env.openSocket);
+          return transcribe(credential, context, queue, requestSignal, () => onCommit?.(), env.openSocket,
+            text => { if (!requestSignal.aborted) options?.onText?.(text); });
         })().then(text => ({ ok: true as const, text }), error => ({ ok: false as const, error }));
       };
       let result = send(false);

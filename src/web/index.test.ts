@@ -3,6 +3,7 @@ import { test } from 'node:test';
 import type { ComposerInputProps, ModuleDraft, ModuleFrontendContext } from '@cockpit/module-api';
 import { activate, composeEditorRef } from './index.ts';
 import type { SpeechService, SpeechSnapshot } from './speech.ts';
+import { HoldGesture } from './hold.ts';
 
 test('editor refs preserve object refs, callback nulls and React 19 cleanup', () => {
   const node = {} as HTMLTextAreaElement;
@@ -40,6 +41,7 @@ test('input middleware preserves native textarea props and keeps decision microp
   let holding = false;
   let focused = false;
   let level = 0;
+  let onGesture: ((gesture: HoldGesture) => void) | undefined;
   for (const key of ['window', 'document']) {
     const original = Object.getOwnPropertyDescriptor(globalThis, key);
     Object.defineProperty(globalThis, key, { configurable: true, value: new EventTarget() });
@@ -56,7 +58,11 @@ test('input middleware preserves native textarea props and keeps decision microp
       createElement: (type: unknown, props: Record<string, unknown> | null, ...children: unknown[]): Element => ({ type, props: props ?? {}, children }),
       useRef: (value: unknown) => ({ current: value }),
       useState: () => [focused, () => {}],
-      useMemo: (factory: () => unknown) => factory(),
+      useMemo: (factory: () => unknown) => {
+        const value = factory();
+        if (value instanceof HoldGesture) onGesture?.(value);
+        return value;
+      },
       useCallback: (fn: unknown) => fn,
       useSyncExternalStore: (_subscribe: unknown, snapshot: () => unknown) => {
         const value = snapshot();
@@ -162,6 +168,21 @@ test('input middleware preserves native textarea props and keeps decision microp
       assert.equal((editingRegion.children[0] as Element).props.placeholder, 'Native placeholder', 'focus restores the native hint');
       focused = false;
       cleanupEffects();
+      holding = true; phase = 'recording';
+      const ownership = t.mock.method(service, 'ownsDraft', () => true);
+      let cancellations = 0;
+      onGesture = gesture => { t.mock.method(gesture, 'interrupt', () => { cancellations++; }); };
+      const streaming = Wrapped({ draft, operation, disabled: false, sendBlocked: false, value: 'live transcript', onSubmit: nativeSubmit, onChange: nativeTextChange });
+      assert.equal(cancellations, 0, 'owned live text cannot cancel the ongoing hold');
+      const heldLayer = (streaming.children[0] as Element).children[1] as Element;
+      assert.equal(heldLayer.children[0], '', 'keep pointer capture without drawing the hint over live text');
+      cleanupEffects();
+      ownership.mock.mockImplementation(() => false);
+      const before = cancellations;
+      Wrapped({ draft, operation, disabled: false, sendBlocked: false, value: 'external edit', onSubmit: nativeSubmit, onChange: nativeTextChange });
+      assert.equal(cancellations, before + 1, 'external changes interrupt a hold without discarding its audio');
+      cleanupEffects(); ownership.mock.restore(); onGesture = undefined;
+      holding = false; phase = 'idle';
       for (const current of ['permission', 'recording', 'stopping', 'transcribing', 'retry'] as const) {
         phase = current;
         holding = true;

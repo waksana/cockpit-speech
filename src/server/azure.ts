@@ -24,7 +24,7 @@ export function definition(deployment: string) {
         input: {
           format: { type: 'audio/pcm', rate: 24000 },
           transcription: { model: deployment, prompt: '' },
-          turn_detection: null,
+          turn_detection: { type: 'server_vad' },
         },
       },
     },

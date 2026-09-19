@@ -1,4 +1,4 @@
-# Cockpit Speech 0.4.0
+# Cockpit Speech 0.5.0
 
 Draft-owned recording lifecycle for waksana/cockpit-speech#11, paired with
 waksana/cockpit#57 and the exact SDK SHA in `tooling/host-sdk.json`.
@@ -25,6 +25,39 @@ waksana/cockpit#57 and the exact SDK SHA in `tooling/host-sdk.json`.
 
 Synthetic lifecycle coverage is not Windows/iOS hardware verification.
 No deployment, service restart, tag or Release is performed by this source change.
+---
+
+# Cockpit Speech 0.4.0
+
+Related to #8 and #9. Retains the Cockpit 0.2.6 SDK pin and public status UI.
+No production deployment, restart, resource configuration change or new local
+model dependency is part of this change.
+
+- Enable Azure server VAD for browser-direct transcription. Full local PCM
+  capture/upload remains independent of networking; silence is not cropped
+  locally. Azure can commit multiple speech turns before capture ends.
+- Keep a per-connection item table and compose all available text in speech
+  order, including later-item text before earlier text arrives. Deltas update
+  the exact original draft region; final text replaces each item's provisional
+  text without duplication. No automatic chat submission.
+- Stop flushes and uploads the tail, sends final commit then clears the input
+  buffer as an ordered drain acknowledgement, and awaits every committed result.
+  Only a final-request-correlated empty commit is normal. Legitimate empty
+  transcripts preserve the selection rather than triggering replay.
+- Track revisions from owned writes, keep user edits and peer blockers safe,
+  retain conflict recovery, and replace the same region during full-audio retry.
+  Live text must neither cancel its own held gesture nor steal keyboard focus.
+- Cancel/clear discard audio and stop future callbacks, preserving already
+  written draft text. Unlike 0.3.x, a held gesture can produce text and incur
+  transcription charges before release.
+- Document Windows Chrome's explicit microphone selection. The reported
+  capture failure improved with device selection; no unsupported device,
+  sample-rate or amplitude-threshold workaround was introduced.
+
+Synthetic Azure results establish protocol behavior, not Windows hardware or
+all-silence/quiet-speech accuracy. VAD can still misclassify; physical-device
+acceptance and final billing remain unverified. Issues remain open for that
+acceptance rather than being automatically closed by this source change.
 
 ---
 
