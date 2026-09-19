@@ -10,6 +10,8 @@ interface Identity { id: string; sessionId: string; purpose: string }
 export interface Recovery extends Identity { text: string }
 export interface SpeechSnapshot {
   phase: 'idle' | 'permission' | 'recording' | 'stopping' | 'transcribing' | 'retry';
+  pressing: boolean;
+  elapsedSeconds: number;
   holdingAtLimit: boolean;
   level: number;
   error: string | null;
@@ -42,7 +44,7 @@ export function insertText(text: string, addition: string, selection: Selection)
 }
 
 export class SpeechService {
-  private state: SpeechSnapshot = { phase: 'idle', holdingAtLimit: false, level: 0, error: null, notice: null, recovery: null, focus: null };
+  private state: SpeechSnapshot = { phase: 'idle', pressing: false, elapsedSeconds: 0, holdingAtLimit: false, level: 0, error: null, notice: null, recovery: null, focus: null };
   private readonly listeners = new Set<() => void>();
   private target: Target | null = null;
   private operation: Operation | null = null;
@@ -80,9 +82,13 @@ export class SpeechService {
   clearTarget(id: string): void {
     if (this.target?.draft.id !== id) return;
     this.target = null;
-    this.update({ focus: null });
+    this.update({ focus: null, pressing: false, elapsedSeconds: 0 });
     if (this.operation) this.cancel('原输入框已关闭，语音输入已取消。');
     else if (!this.state.recovery) this.update({ phase: 'idle', error: null, notice: null });
+  }
+  setPressing(id: string, pressing: boolean): void {
+    if (this.target?.draft.id !== id || this.state.pressing === pressing) return;
+    this.update({ pressing });
   }
   focusTarget(selection?: Selection): void {
     const target = this.target;
@@ -121,24 +127,28 @@ export class SpeechService {
       return;
     }
     this.operation = operation;
-    this.update({ phase: 'permission', holdingAtLimit: false, level: 0, error: null, notice: null, focus: null });
+    this.update({ phase: 'permission', elapsedSeconds: 0, holdingAtLimit: false, level: 0, error: null, notice: null, focus: null });
     try {
       operation.preparation = this.options.prepare(operation.controller.signal, error => this.fail(operation, error), () => {
         operation.limited = true;
         if (this.current(operation) && this.state.phase === 'recording') {
-          if (mode === 'hold') this.update({ holdingAtLimit: true, level: 0 });
+          if (mode === 'hold') this.update({ holdingAtLimit: true, elapsedSeconds: 120, level: 0 });
           else void this.stop();
         }
       });
       const recording = await operation.preparation.start(this.options.session, operation.context, {
         waitForStop: mode === 'hold',
-        onLevel: value => { if (this.current(operation) && this.state.phase === 'recording') this.update({ level: value }); },
+        onLevel: (value, seconds) => {
+          if (this.current(operation) && this.state.phase === 'recording' && !this.state.holdingAtLimit) {
+            this.update({ level: value, elapsedSeconds: Math.min(120, Math.floor(seconds)) });
+          }
+        },
       });
       if (!this.current(operation)) { recording.cancel(); return; }
       operation.recording = recording;
       this.update({ phase: 'recording' });
       if (operation.limited) {
-        if (mode === 'hold') this.update({ holdingAtLimit: true, level: 0 });
+        if (mode === 'hold') this.update({ holdingAtLimit: true, elapsedSeconds: 120, level: 0 });
         else void this.stop();
       }
     } catch (error) { this.fail(operation, error); }
@@ -211,6 +221,12 @@ export class SpeechService {
   dismiss(): void {
     if (!this.operation) this.update({ recovery: null, error: null, notice: null });
   }
+  hasRetainedRecording(): boolean { return !!this.operation?.recording?.retryable(); }
+  clear(): void {
+    if (this.operation) this.finish(this.operation);
+    this.update({ phase: 'idle', pressing: false, elapsedSeconds: 0, holdingAtLimit: false,
+      level: 0, recovery: null, focus: null, error: null, notice: null });
+  }
   notifyCopyFailure(): void { this.error(new SpeechError('COPY_FAILED', '无法访问剪贴板，请手动选择并复制识别结果。')); }
   private error(error: unknown): void {
     const safe = error instanceof SpeechError ? error : new SpeechError('SPEECH_FAILED', '录音或转写失败，请稍后重试。');
@@ -241,7 +257,7 @@ export class SpeechService {
   cancel(_notice = '语音输入已取消。'): void {
     if (!this.operation) return;
     this.finish(this.operation);
-    this.update({ phase: 'idle', holdingAtLimit: false, level: 0, notice: null, error: null });
+    this.update({ phase: 'idle', pressing: false, elapsedSeconds: 0, holdingAtLimit: false, level: 0, notice: null, error: null });
   }
   dispose = (): void => {
     if (this.disposed) return;

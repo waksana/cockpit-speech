@@ -63,7 +63,7 @@ function fixture(options: { permission?: boolean; purpose?: DraftPurpose; ready?
   let ready: Promise<void> = Promise.resolve();
   let readinessError: unknown;
   let retryable = true;
-  const levels: ((value: number) => void)[] = [];
+  const levels: ((value: number, seconds: number) => void)[] = [];
   const recording: Recording = {
     stop: async committed => { stops++; await ready; if (readinessError) throw readinessError; requests++; committed?.(); return result.promise; },
     retry: async committed => { requests++; committed?.(); return retryResult.promise; },
@@ -98,8 +98,52 @@ function fixture(options: { permission?: boolean; purpose?: DraftPurpose; ready?
     setRetryable: (value: boolean) => { retryable = value; },
     values: () => ({ cancelled, stops, requests, captures, preparationsCancelled, readyCalls, capturedContext, capturedSignal }),
     limit: () => limitReached(), fail: (e: SpeechError) => recorderFailure(e),
-    level: (value: number, index = levels.length - 1) => levels[index]!(value) };
+    level: (value: number, index = levels.length - 1, seconds = 12.5) => levels[index]!(value, seconds) };
 }
+test('elapsed time follows captured samples and clear resets retained operations without changing drafts', async t => {
+  const f = fixture(); t.after(() => f.service.dispose());
+  f.service.setPressing(f.original.id, true);
+  assert.equal(f.service.getSnapshot().pressing, true);
+  await f.service.start('hold');
+  f.level(0.2, 0, 7.9);
+  assert.equal(f.service.getSnapshot().elapsedSeconds, 7);
+  f.limit();
+  f.level(0.5, 0, 121);
+  assert.equal(f.service.getSnapshot().elapsedSeconds, 120);
+  assert.equal(f.service.getSnapshot().level, 0);
+  f.service.clear();
+  assert.equal(f.service.getSnapshot().phase, 'idle');
+  assert.equal(f.service.getSnapshot().elapsedSeconds, 0);
+  assert.equal(f.service.getSnapshot().pressing, false);
+  assert.equal(f.original.getSnapshot().blocks.length, 0);
+  assert.equal(f.original.getSnapshot().text, 'hello world');
+  f.level(0.5, 0, 19);
+  assert.equal(f.service.getSnapshot().elapsedSeconds, 0);
+});
+test('clear cancels retries and ignores late results, including failed startup without retained audio', async t => {
+  const f = fixture(); t.after(() => f.service.dispose());
+  await f.service.start();
+  const stopped = f.service.stop();
+  f.result.reject(new SpeechError('SPEECH_FAILED', 'synthetic failure'));
+  await stopped;
+  assert.equal(f.service.hasRetainedRecording(), true);
+  const retry = f.service.retry();
+  f.service.clear();
+  f.retryResult.resolve('late transcript'); await retry;
+  assert.equal(f.service.getSnapshot().phase, 'idle');
+  assert.equal(f.service.hasRetainedRecording(), false);
+  assert.equal(f.service.getSnapshot().recovery, null);
+  assert.equal(f.original.getSnapshot().text, 'hello world');
+  assert.equal(f.original.getSnapshot().blocks.length, 0);
+  const denied = fixture({ permission: true }); t.after(() => denied.service.dispose());
+  const start = denied.service.start();
+  denied.setRetryable(false);
+  denied.permission.reject(new SpeechError('PERMISSION_DENIED', 'synthetic denial')); await start;
+  assert.equal(denied.service.getSnapshot().phase, 'retry');
+  denied.service.clear();
+  assert.equal(denied.service.getSnapshot().phase, 'idle');
+  assert.equal(denied.service.canStart(), true);
+});
 test('hold and button recordings publish live levels, resetting on stop and ignoring older callbacks', async t => {
   for (const mode of ['hold', 'button'] as const) {
     const f = fixture(); t.after(() => f.service.dispose());

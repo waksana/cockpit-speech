@@ -67,10 +67,20 @@ sibling, preserving controlled props, native events and React 19 ref cleanup.
 The native send remains host-owned. Prompt/ask/plan and free-text gates are
 unchanged; File remains prompt-only on the left.
 
-One circular button conveys all operational states: idle microphone, disabled
-startup spinner, recording red volume dot, disabled sending/transcription spinner,
-red manual retry. Accessible names and title include the safe failure reason.
-There is no timer, phase text, success/error panel or global error notification.
+One circular button provides idle microphone, disabled startup spinner, solid
+red stop square, disabled sending/transcription spinner and red manual retry.
+An existing `composerEditor` wrapper places the status row before the complete
+Base, outside the actual input/control row. Only the host's public `ck-*` input
+and status classes own typography, row geometry and alignment; speech CSS does
+not query, move, or style queue/question ancestors. The host alone owns that
+layout. The status row's dense trailing clear action follows the public class.
+Preparation/processing use spinners; actual capture uses the reactive dot and
+elapsed seconds derived from PCM byte count, with no timer or wall-clock drift.
+The held limit freezes at 120 seconds and uses a static pause indicator.
+Error/recovery states use a static error indicator, never a misleading spinner.
+Clear always resets speech state, even when startup failed before an operation
+was retained. It cancels active/replayed work and clears recovery without editing
+the draft or allowing late completions. Retry remains in the microphone control.
 Only draft-conflict text recovery uses the existing `composer` wrapper after the
 whole row; it cannot redirect insertion to another draft.
 
@@ -91,13 +101,12 @@ recording stops/transcribes. Unmount, draft/host invalidation, visibility loss,
 window blur, resize and Escape/Tab cancel; unrelated scrolling does not.
 The independent microphone button and post-stop retry/recovery paths are unchanged.
 
-Both hold and microphone-button recordings use the same fixed button for all
-feedback: startup spinner, red RMS-driven dot, then submission/transcription
-spinner. No full-screen portal, separate loading overlay or recording panel is
-mounted. The dot uses 28% of the button content size and scales only from 1 to 2,
-with clipping as a final guard; it never exceeds the button. RMS comes from the
-existing PCM16 chunks (no second microphone or analyser). The level callback is
-guarded by exact operation identity and reset on exit for either entry mode.
+Both hold and microphone-button recordings use the same status feedback.
+The status marker's 7px dot scales from 1 to 2; the stop icon never scales.
+RMS and elapsed time come from the existing PCM16 chunks (no second microphone,
+analyser or interval). Progress is guarded by exact operation identity.
+Press feedback is bound to the current draft and does not start audio before
+the hold threshold. Short-tap focus still uses the completed click.
 
 Hold starts pass `waitForStop` to the recording preparation. At the render or wall
 limit capture stops, but the transport queue's sealed view stays false until the
@@ -119,7 +128,7 @@ never production configuration or user recordings. They cover:
   initial resume, silent readiness failures, devices and bounded waits.
 - Safe provider errors including rate limits, invalid/mismatched/empty results,
   stale callbacks, fresh retry cursors, cleanup and actual service lease release.
-- Single-button states, no notification bars, native props/ref/IME preservation,
+- Input/status composition, truthful progress, native props/ref/IME preservation,
   exact draft/revision conflicts, retained recovery and no automatic submission.
 - Tap/hold timing, upward swipe despite capture, irreversible cancellation,
   startup release, late permission grants, capture loss and interruption cleanup.
@@ -127,7 +136,8 @@ never production configuration or user recordings. They cover:
 
 Run `pnpm typecheck`, `pnpm test`, then `pnpm build`. Packaging requires a fresh
 build from clean committed source; use a new output directory and the existing
-package verifier. Dependencies and the SDK pin are unchanged.
+package verifier. The precise host pin is in `tooling/host-sdk.json`; the package
+requires the paired Cockpit 0.2.6 public styles.
 
 The paired host regression imports the actual compiled middleware:
 
