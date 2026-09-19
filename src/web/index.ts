@@ -79,7 +79,7 @@ export const activate: ActivateFrontend = context => {
             && speech.canStart(),
           bounds: () => input.current?.getBoundingClientRect(),
           phase: () => speech.getSnapshot().phase,
-          start: () => { void speech.start(); },
+          start: () => { void speech.start('hold'); },
           stop: () => { void speech.stop(); },
           cancel: () => speech.cancel(),
           focus: () => input.current?.focus(),
@@ -123,7 +123,7 @@ export const activate: ActivateFrontend = context => {
         const retry = state.phase === 'retry';
         const active = state.phase !== 'idle' && !retry;
         const busy = active && state.phase !== 'recording';
-        const label = state.phase === 'recording' ? '停止录音并转写'
+        const label = state.phase === 'recording' ? (state.holdingAtLimit ? '录音已达两分钟，松手转写' : '停止录音并转写')
           : state.phase === 'permission' ? '正在启动麦克风'
               : state.phase === 'stopping' ? '正在提交录音'
                 : state.phase === 'transcribing' ? '正在转写录音'

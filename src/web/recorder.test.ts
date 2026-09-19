@@ -135,6 +135,42 @@ test('prompt is confirmed before audio, including explicit empty context on cach
   for (const text of ['a'.repeat(1000), '😀'.repeat(1000)]) assert.equal([...transcriptionPrompt(text)].length, 1022);
   assert.throws(() => transcriptionPrompt('a'.repeat(1001)));
 });
+test('held audio hitting either limit stops hardware but never commits until release, and exit discards it', async t => {
+  for (const limit of ['render', 'wall'] as const) for (const action of ['release', 'exit'] as const) {
+    await t.test(`${limit} limit then ${action}`, async t => {
+      const f = fixture(); let limited = 0;
+      if (limit === 'wall') t.mock.timers.enable({ apis: ['setTimeout'] });
+      const preparation = f.prepare(undefined, () => { limited++; });
+      const starting = preparation.start(async () => credential(), 'held context', { waitForStop: true });
+      f.grant(f.stream); const recording = await starting; f.pcm();
+      const drain = async () => {
+        if (limit === 'wall') { t.mock.timers.tick(25); await turn(); }
+        else await pump();
+      };
+      await drain();
+      if (limit === 'render') f.worklet.port.onmessage?.({ data: { type: 'ended', limited: true } });
+      else t.mock.timers.tick(MAX_SECONDS * 1000);
+      await turn(); await drain();
+      assert.equal(limited, 1);
+      assert.equal(f.track.readyState, 'ended');
+      assert.equal(f.values().closes, 1);
+      const socket = f.sockets[0]!;
+      assert.equal(socket.sent.filter(m => m.type === 'input_audio_buffer.commit').length, 0);
+      assert.equal(recording.retryable(), true);
+      if (action === 'release') {
+        const stopped = recording.stop(); await drain();
+        assert.equal(socket.sent.filter(m => m.type === 'input_audio_buffer.commit').length, 1);
+        socket.commit(); socket.final(); assert.equal(await stopped, 'recognized');
+      } else {
+        recording.cancel(); await drain();
+        assert.equal(recording.retryable(), false);
+        assert.equal(socket.closed, 1);
+        assert.equal(socket.sent.filter(m => m.type === 'input_audio_buffer.commit').length, 0);
+      }
+      recording.cancel();
+    });
+  }
+});
 test('failed send closes its connection; manual retry replays the identical retained chunks with a fresh cursor', async () => {
   const f = fixture(); const recording = await f.start('original prompt');
   f.pcm(11); f.pcm(22); await pump();

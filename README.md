@@ -48,6 +48,11 @@ not retains it for retry. Pointer capture loss/cancellation, window blur, page
 hiding, scrolling/resizing and input replacement also interrupt the gesture.
 The bounds exclude File, microphone and send buttons.
 
+At 120 seconds, a held gesture stops capture and retains its bounded audio but
+does not commit or insert anything until release inside. Moving out still
+discards it. The independent microphone button keeps its existing automatic
+stop-and-transcribe behavior at the same limit.
+
 Focused or nonempty inputs keep native editing. To paste into an empty unfocused
 input, tap first, then use native long-press paste. Keyboard Tab still focuses
 the real textarea; there is no additional tab stop. The independent microphone
