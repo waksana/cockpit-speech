@@ -11,6 +11,7 @@ export interface Recovery extends Identity { text: string }
 export interface SpeechSnapshot {
   phase: 'idle' | 'permission' | 'recording' | 'stopping' | 'transcribing' | 'retry';
   holdingAtLimit: boolean;
+  level: number;
   error: string | null;
   notice: string | null;
   recovery: Recovery | null;
@@ -41,7 +42,7 @@ export function insertText(text: string, addition: string, selection: Selection)
 }
 
 export class SpeechService {
-  private state: SpeechSnapshot = { phase: 'idle', holdingAtLimit: false, error: null, notice: null, recovery: null, focus: null };
+  private state: SpeechSnapshot = { phase: 'idle', holdingAtLimit: false, level: 0, error: null, notice: null, recovery: null, focus: null };
   private readonly listeners = new Set<() => void>();
   private target: Target | null = null;
   private operation: Operation | null = null;
@@ -120,21 +121,24 @@ export class SpeechService {
       return;
     }
     this.operation = operation;
-    this.update({ phase: 'permission', holdingAtLimit: false, error: null, notice: null, focus: null });
+    this.update({ phase: 'permission', holdingAtLimit: false, level: 0, error: null, notice: null, focus: null });
     try {
       operation.preparation = this.options.prepare(operation.controller.signal, error => this.fail(operation, error), () => {
         operation.limited = true;
         if (this.current(operation) && this.state.phase === 'recording') {
-          if (mode === 'hold') this.update({ holdingAtLimit: true });
+          if (mode === 'hold') this.update({ holdingAtLimit: true, level: 0 });
           else void this.stop();
         }
       });
-      const recording = await operation.preparation.start(this.options.session, operation.context, { waitForStop: mode === 'hold' });
+      const recording = await operation.preparation.start(this.options.session, operation.context, {
+        waitForStop: mode === 'hold',
+        onLevel: value => { if (mode === 'hold' && this.current(operation) && this.state.phase === 'recording') this.update({ level: value }); },
+      });
       if (!this.current(operation)) { recording.cancel(); return; }
       operation.recording = recording;
       this.update({ phase: 'recording' });
       if (operation.limited) {
-        if (mode === 'hold') this.update({ holdingAtLimit: true });
+        if (mode === 'hold') this.update({ holdingAtLimit: true, level: 0 });
         else void this.stop();
       }
     } catch (error) { this.fail(operation, error); }
@@ -162,7 +166,7 @@ export class SpeechService {
     if (!operation.recording) return;
     const completion = operation.completion = {};
     const current = () => this.current(operation) && operation.completion === completion;
-    this.update({ phase: 'stopping', holdingAtLimit: false, error: null });
+    this.update({ phase: 'stopping', holdingAtLimit: false, level: 0, error: null });
     try {
       const text = await operation.recording[retry ? 'retry' : 'stop'](() => {
         if (current()) this.update({ phase: 'transcribing' });
@@ -231,13 +235,13 @@ export class SpeechService {
     if (operation.recording?.retryable()) {
       this.release(operation);
     } else this.finish(operation);
-    this.update({ phase: 'retry', holdingAtLimit: false });
+    this.update({ phase: 'retry', holdingAtLimit: false, level: 0 });
     this.error(error);
   }
   cancel(_notice = '语音输入已取消。'): void {
     if (!this.operation) return;
     this.finish(this.operation);
-    this.update({ phase: 'idle', holdingAtLimit: false, notice: null, error: null });
+    this.update({ phase: 'idle', holdingAtLimit: false, level: 0, notice: null, error: null });
   }
   dispose = (): void => {
     if (this.disposed) return;

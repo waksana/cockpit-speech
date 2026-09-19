@@ -193,7 +193,7 @@ test('cancelled transcription completion never writes to the original or replace
   assert.equal(f.service.getSnapshot().recovery, null);
   assert.equal(f.original.getSnapshot().blocks.length, 0);
 });
-test('hold release or exit during permission cancels the lease and every late recording', async t => {
+test('hold release or upward swipe during permission cancels the lease and every late recording', async t => {
   for (const release of [true, false]) {
     await t.test(release ? 'release before ready' : 'exit before ready', async t => {
       t.mock.timers.enable({ apis: ['setTimeout'] });
@@ -211,7 +211,7 @@ test('hold release or exit during permission cancels the lease and every late re
       t.mock.timers.tick(HOLD_DELAY);
       assert.equal(f.service.getSnapshot().phase, 'permission');
       if (release) gesture.up(point);
-      else gesture.move({ ...point, clientX: 100 });
+      else gesture.move({ ...point, clientY: -50 });
       assert.equal(f.original.getSnapshot().blocks.length, 0);
       assert.equal(f.values().capturedSignal?.aborted, true);
       f.permission.resolve(f.recording);

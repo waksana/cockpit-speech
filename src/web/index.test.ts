@@ -37,6 +37,7 @@ test('input middleware preserves native textarea props and keeps decision microp
   let service!: SpeechService;
   let phase: SpeechSnapshot['phase'] = 'idle';
   let error: string | null = null;
+  let holding = false;
   for (const key of ['window', 'document']) {
     const original = Object.getOwnPropertyDescriptor(globalThis, key);
     Object.defineProperty(globalThis, key, { configurable: true, value: new EventTarget() });
@@ -47,6 +48,7 @@ test('input middleware preserves native textarea props and keeps decision microp
   const context = {
     apiVersion: 2, uiVersion: 1, chatWindowVersion: 1, composerInputVersion: 1,
     signal: new AbortController().signal, request: async () => { throw new Error('No HTTP from render'); }, report() {},
+    createPortal: (child: Element) => ({ type: 'portal', props: {}, children: [child] }),
     react: {
       Fragment: 'fragment',
       createElement: (type: unknown, props: Record<string, unknown> | null, ...children: unknown[]): Element => ({ type, props: props ?? {}, children }),
@@ -55,7 +57,8 @@ test('input middleware preserves native textarea props and keeps decision microp
       useMemo: (factory: () => unknown) => factory(),
       useCallback: (fn: unknown) => fn,
       useSyncExternalStore: (_subscribe: unknown, snapshot: () => unknown) =>
-        snapshot === service?.getSnapshot ? { ...service.getSnapshot(), phase, error } : snapshot(),
+        snapshot === service?.getSnapshot ? { ...service.getSnapshot(), phase, error }
+          : typeof snapshot() === 'boolean' ? holding : snapshot(),
       useLayoutEffect: (effect: () => void | (() => void)) => { const cleanup = effect(); if (cleanup) effects.push(cleanup); },
     },
     state: {
@@ -113,7 +116,8 @@ test('input middleware preserves native textarea props and keeps decision microp
       (base.props.onFocus as (event: object) => void)({});
       (base.props.onBlur as (event: object) => void)({});
       assert.equal(focuses, 1); assert.equal(blurs, 1);
-      assert.equal(tree.children.length, 2, 'only input region and microphone, no recovery panel inside row');
+      assert.equal(tree.children.length, 3, 'input region, microphone, and optional body portal');
+      assert.equal(tree.children[2], null);
       const mic = tree.children[1] as Element;
       assert.equal(mic.type, 'button'); assert.equal(mic.props.type, 'button');
       assert.equal(mic.props['aria-label'], '开始语音输入');
@@ -129,6 +133,7 @@ test('input middleware preserves native textarea props and keeps decision microp
       cleanupEffects();
       for (const current of ['permission', 'recording', 'stopping', 'transcribing', 'retry'] as const) {
         phase = current;
+        holding = true;
         const rendered = Wrapped({ draft, operation, disabled: false, sendBlocked: false, value: '', onSubmit: nativeSubmit, onChange: nativeTextChange });
         const button = rendered.children[1] as Element;
         const busy = current !== 'recording' && current !== 'retry';
@@ -143,6 +148,13 @@ test('input middleware preserves native textarea props and keeps decision microp
           (button.props.onClick as () => void)();
           assert.equal(service.getSnapshot().phase, 'idle', 'busy clicks neither cancel nor start');
         }
+        const portal = rendered.children[2] as Element | null;
+        assert.equal(!!portal, current === 'permission' || current === 'recording', 'release/transcription never retain the full-screen feedback');
+        if (portal) {
+          assert.equal(portal.type, 'portal');
+          assert.equal((portal.children[0] as Element).props.className, 'cockpit-speech-screen');
+        }
+        holding = false;
         cleanupEffects();
       }
       phase = 'idle';
