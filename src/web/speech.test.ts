@@ -4,6 +4,7 @@ import type { ChatWindowSnapshot, DraftPurpose, HostSnapshot, ModuleDraft, Modul
 import { SpeechError } from '../shared/limits.ts';
 import { SpeechService } from './speech.ts';
 import type { Recording } from './recorder.ts';
+import { HOLD_DELAY, HoldGesture } from './hold.ts';
 
 function deferred<T>() {
   let resolve!: (value: T) => void;
@@ -62,6 +63,7 @@ function fixture(options: { permission?: boolean; purpose?: DraftPurpose; ready?
   let ready: Promise<void> = Promise.resolve();
   let readinessError: unknown;
   let retryable = true;
+  const levels: ((value: number) => void)[] = [];
   const recording: Recording = {
     stop: async committed => { stops++; await ready; if (readinessError) throw readinessError; requests++; committed?.(); return result.promise; },
     retry: async committed => { requests++; committed?.(); return retryResult.promise; },
@@ -74,7 +76,8 @@ function fixture(options: { permission?: boolean; purpose?: DraftPurpose; ready?
       capturedSignal = signal;
       recorderFailure = fail; limitReached = limit;
       return {
-        start: async (session, context) => {
+        start: async (session, context, recordingOptions) => {
+          if (recordingOptions?.onLevel) levels.push(recordingOptions.onLevel);
           captures++; capturedContext = context;
           ready = session(signal).then(() => {}, error => { readinessError = error; });
           return options.permission ? permission.promise : recording;
@@ -94,8 +97,29 @@ function fixture(options: { permission?: boolean; purpose?: DraftPurpose; ready?
   return { service, host, chatWindow, original, permission, result, retryResult, controller, reports, recording,
     setRetryable: (value: boolean) => { retryable = value; },
     values: () => ({ cancelled, stops, requests, captures, preparationsCancelled, readyCalls, capturedContext, capturedSignal }),
-    limit: () => limitReached(), fail: (e: SpeechError) => recorderFailure(e) };
+    limit: () => limitReached(), fail: (e: SpeechError) => recorderFailure(e),
+    level: (value: number, index = levels.length - 1) => levels[index]!(value) };
 }
+test('hold and button recordings publish live levels, resetting on stop and ignoring older callbacks', async t => {
+  for (const mode of ['hold', 'button'] as const) {
+    const f = fixture(); t.after(() => f.service.dispose());
+    await f.service.start(mode);
+    f.level(0.25);
+    assert.equal(f.service.getSnapshot().level, 0.25);
+    f.service.cancel();
+    f.level(0.9);
+    assert.equal(f.service.getSnapshot().level, 0);
+    await f.service.start(mode);
+    f.level(0.8, 0);
+    assert.equal(f.service.getSnapshot().level, 0);
+    f.level(0.5);
+    const stopped = f.service.stop();
+    f.level(0.9);
+    assert.equal(f.service.getSnapshot().level, 0);
+    f.result.resolve('spoken'); await stopped;
+    assert.equal(f.service.getSnapshot().level, 0);
+  }
+});
 test('prompt, ask and plan insert at the captured selection only after stop; context is captured once', async t => {
   for (const purpose of [{ kind: 'prompt' }, { kind: 'ask', requestId: 'a' }, { kind: 'plan', requestId: 'p' }] as const) {
     const f = fixture({ purpose }); t.after(() => f.service.dispose());
@@ -192,6 +216,39 @@ test('cancelled transcription completion never writes to the original or replace
   assert.equal(f.service.getSnapshot().recovery, null);
   assert.equal(f.original.getSnapshot().blocks.length, 0);
 });
+test('hold release or upward swipe during permission cancels the lease and every late recording', async t => {
+  for (const release of [true, false]) {
+    await t.test(release ? 'release before ready' : 'exit before ready', async t => {
+      t.mock.timers.enable({ apis: ['setTimeout'] });
+      const f = fixture({ permission: true });
+      t.after(() => f.service.dispose());
+      f.original.editText('');
+      const gesture = new HoldGesture({
+        allowed: () => f.service.canStart(), bounds: () => ({ left: 0, top: 0, right: 100, bottom: 40 }),
+        phase: () => f.service.getSnapshot().phase,
+        start: () => { void f.service.start(); }, stop: () => { void f.service.stop(); },
+        cancel: () => f.service.cancel(), focus: () => assert.fail('must not focus on long hold'),
+      });
+      const point = { pointerId: 1, clientX: 20, clientY: 20, button: 0, isPrimary: true };
+      gesture.down(point, { setPointerCapture() {}, hasPointerCapture: () => false, releasePointerCapture() {} });
+      t.mock.timers.tick(HOLD_DELAY);
+      assert.equal(f.service.getSnapshot().phase, 'permission');
+      if (release) gesture.up(point);
+      else gesture.move({ ...point, clientY: -50 });
+      assert.equal(f.original.getSnapshot().blocks.length, 0);
+      assert.equal(f.values().capturedSignal?.aborted, true);
+      f.permission.resolve(f.recording);
+      await new Promise<void>(resolve => setImmediate(resolve));
+      gesture.move(point); gesture.up(point);
+      assert.equal(f.values().cancelled, 1);
+      assert.equal(f.values().stops, 0);
+      assert.equal(f.values().requests, 0);
+      assert.equal(f.service.getSnapshot().phase, 'idle');
+      assert.equal(f.service.canRetry(), false);
+      assert.equal(f.original.getSnapshot().text, '');
+    });
+  }
+});
 test('failures release leases, retain replay data and expose only a safe retry-button error', async t => {
   for (const failure of ['recorder', 'http']) {
     const f = fixture(); t.after(() => f.service.dispose());
@@ -272,6 +329,28 @@ test('pending, unconfirmed, peer blocks and free-text gates prevent capture and 
   }
   f.service.setTarget({ draft: f.original, disabled: false, sendBlocked: true, selection: () => ({ start: 0, end: 0 }) });
   assert.equal(f.service.canStart(), false);
+});
+test('held limit waits for release, keeps its lease and can still be cancelled without text or retry', async t => {
+  for (const action of ['release', 'exit']) {
+    const f = fixture(); t.after(() => f.service.dispose());
+    await f.service.start('hold');
+    f.limit(); f.limit();
+    assert.equal(f.service.getSnapshot().phase, 'recording');
+    assert.equal(f.service.getSnapshot().holdingAtLimit, true);
+    assert.equal(f.original.getSnapshot().blocks.length, 1);
+    assert.equal(f.values().stops, 0);
+    if (action === 'release') {
+      const stop = f.service.stop(); f.result.resolve('capped speech'); await stop;
+      assert.equal(f.original.getSnapshot().text, 'hello capped speech');
+    } else {
+      f.service.cancel();
+      assert.equal(f.values().requests, 0);
+      assert.equal(f.service.canRetry(), false);
+      assert.equal(f.original.getSnapshot().text, 'hello world');
+    }
+    assert.equal(f.service.getSnapshot().holdingAtLimit, false);
+    assert.equal(f.original.getSnapshot().blocks.length, 0);
+  }
 });
 test('double stop sends once; peer block appearing during transcription retains text', async t => {
   const f = fixture(); t.after(() => f.service.dispose());

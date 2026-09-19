@@ -1,5 +1,6 @@
 import type { ActivateFrontend, ComposerInputProps } from '@cockpit/module-api';
 import type { Ref } from 'react';
+import { HoldGesture } from './hold.ts';
 import { icons } from './icons.ts';
 import { prepareRecording } from './recorder.ts';
 import { SpeechService } from './speech.ts';
@@ -65,10 +66,49 @@ export const activate: ActivateFrontend = context => {
       wrap: Base => function SpeechInput(props: ComposerInputProps) {
         const draft = context.state.bindDraft(props.draft);
         const input = React.useRef<HTMLTextAreaElement | null>(null);
+        const [focused, setFocused] = React.useState(false);
+        const latest = React.useRef(props);
+        latest.current = props;
         const ref = React.useMemo(() => composeEditorRef(input, props.editorRef), [props.editorRef]);
         const state = React.useSyncExternalStore(speech.subscribe, speech.getSnapshot);
         const snapshot = React.useSyncExternalStore(draft.subscribe.bind(draft), draft.getSnapshot.bind(draft));
-        React.useSyncExternalStore(context.state.host.subscribe, context.state.host.getSnapshot);
+        const host = React.useSyncExternalStore(context.state.host.subscribe, context.state.host.getSnapshot);
+        const gesture = React.useMemo(() => new HoldGesture({
+          allowed: () => !latest.current.disabled && !latest.current.sendBlocked && latest.current.value === ''
+            && draft.getSnapshot().text === '' && !!input.current && input.current.ownerDocument.activeElement !== input.current
+            && speech.canStart(),
+          bounds: () => input.current?.getBoundingClientRect(),
+          phase: () => speech.getSnapshot().phase,
+          start: () => { void speech.start('hold'); },
+          stop: () => { void speech.stop(); },
+          cancel: () => speech.cancel(),
+          focus: () => input.current?.focus(),
+        }), [draft]);
+        const holding = React.useSyncExternalStore(gesture.subscribe, gesture.getSnapshot);
+        React.useLayoutEffect(() => {
+          const cancel = gesture.cancel;
+          const visibility = () => { if (document.visibilityState !== 'visible') cancel(); };
+          const keyboard = (event: KeyboardEvent) => {
+            if (gesture.getSnapshot() && (event.key === 'Escape' || event.key === 'Tab')) cancel();
+          };
+          window.addEventListener('blur', cancel);
+          window.addEventListener('pagehide', cancel);
+          window.addEventListener('resize', cancel);
+          window.addEventListener('keydown', keyboard);
+          document.addEventListener('visibilitychange', visibility);
+          return () => {
+            cancel();
+            window.removeEventListener('blur', cancel);
+            window.removeEventListener('pagehide', cancel);
+            window.removeEventListener('resize', cancel);
+            window.removeEventListener('keydown', keyboard);
+            document.removeEventListener('visibilitychange', visibility);
+          };
+        }, [gesture]);
+        React.useLayoutEffect(() => {
+          if (focused || props.value !== '' || snapshot.text !== '' || props.disabled || props.sendBlocked
+            || !host.visible || !host.connected || host.sessionId !== draft.sessionId) gesture.cancel();
+        }, [gesture, focused, props.value, snapshot.text, props.disabled, props.sendBlocked, host, draft.sessionId]);
         const selection = React.useCallback(() => ({
           start: input.current?.selectionStart ?? draft.getSnapshot().text.length,
           end: input.current?.selectionEnd ?? draft.getSnapshot().text.length,
@@ -86,7 +126,7 @@ export const activate: ActivateFrontend = context => {
         const retry = state.phase === 'retry';
         const active = state.phase !== 'idle' && !retry;
         const busy = active && state.phase !== 'recording';
-        const label = state.phase === 'recording' ? '停止录音并转写'
+        const label = state.phase === 'recording' ? (state.holdingAtLimit ? '录音已达两分钟，松手转写' : '停止录音并转写')
           : state.phase === 'permission' ? '正在启动麦克风'
               : state.phase === 'stopping' ? '正在提交录音'
                 : state.phase === 'transcribing' ? '正在转写录音'
@@ -96,13 +136,40 @@ export const activate: ActivateFrontend = context => {
           type: 'button', className: `ck-icon-button cockpit-speech-mic${retry ? ' cockpit-speech-retry' : ''}`, disabled,
           'aria-label': label, title: state.error ?? label, 'aria-pressed': state.phase === 'recording', 'aria-busy': busy,
           onClick: () => {
+            gesture.cancel();
             if (state.phase === 'recording') void speech.stop();
             else if (retry) void speech.retry();
             else if (!busy) void speech.start();
           },
-        }, busy ? h('span', { className: 'cockpit-speech-spinner', 'aria-hidden': true }) : h(Icon, { name: retry ? 'retry' : active ? 'square' : 'mic' }));
+        }, busy ? h('span', { className: 'cockpit-speech-spinner', 'aria-hidden': true })
+          : state.phase === 'recording' ? h('span', {
+            className: 'cockpit-speech-dot', 'aria-hidden': true,
+            style: { transform: `scale(${1 + Math.min(1, state.level * 6)})` },
+          }) : h(Icon, { name: retry ? 'retry' : 'mic' }));
+        const showGesture = holding || (!focused && props.value === '' && snapshot.text === ''
+          && !props.disabled && !props.sendBlocked && speech.canStart());
         return h(React.Fragment, null,
-          h(Base, { ...props, editorRef: ref }), button,
+          h('div', { className: 'cockpit-speech-input' },
+            h(Base, { ...props, editorRef: ref,
+              placeholder: showGesture ? '' : props.placeholder,
+              onFocus: event => { setFocused(true); gesture.cancel(); props.onFocus?.(event); },
+              onBlur: event => { setFocused(false); props.onBlur?.(event); },
+            }),
+            showGesture ? h('div', {
+              className: 'cockpit-speech-hold', 'aria-hidden': true,
+              onPointerDown: event => { if (gesture.down(event, event.currentTarget)) event.preventDefault(); },
+              onPointerMove: event => {
+                for (const point of event.nativeEvent.getCoalescedEvents?.() ?? []) gesture.move(point);
+                gesture.move(event);
+              },
+              onPointerUp: event => { gesture.up(event); },
+              onPointerCancel: event => { gesture.lost(event.pointerId); },
+              onLostPointerCapture: event => { gesture.lost(event.pointerId); },
+              onContextMenu: event => event.preventDefault(),
+              // Keep the touch target mounted through release; focus in the completed click gesture.
+              onClick: event => { event.preventDefault(); gesture.click(); },
+            }, '轻点输入，按住说话') : null,
+          ), button,
         );
       },
     }, {

@@ -12,9 +12,9 @@ The fixed circular microphone follows the actual editor and precedes native
 send, for prompt, ask and plan inputs. File stays on the left and prompt-only.
 Native free-text restrictions leave the microphone visible but disabled.
 
-**Microphone -> disabled spinner (starting microphone) -> stop square
+**Microphone -> disabled spinner (starting microphone) -> red volume dot
 (local recording) -> disabled spinner (sending/transcribing) -> microphone.**
-Wait for the square before speaking. Permission and device startup still take
+Wait for the red dot before speaking. Permission and device startup still take
 time, but credentials and networking no longer delay local recording. There is
 no timer, adjacent phase text, or success/error notification panel.
 
@@ -29,6 +29,43 @@ duplex conversation. Successful text is inserted at the original selection,
 never sent automatically. If the draft changed, its text is not overwritten:
 the separate result recovery field offers copy, explicit insertion at the
 current caret, or discard. Only this conflict recovery can add a panel.
+
+## Hold to talk on an empty input
+
+An empty, unfocused, writable input displays a non-editing gesture layer:
+**轻点输入，按住说话**. A short tap focuses the real textarea for typing or
+native selection/paste. Holding for 300 ms starts the existing microphone button's
+spinner. Once ready, a red dot inside that button changes size with actual
+captured volume, always within the fixed button bounds. Release to transcribe
+into the original draft, never send a message; the same button spins while
+waiting for the result. Release before readiness cancels instead. Clicking the
+microphone uses the identical spinner/red-dot feedback; clicking the dot stops.
+There is no full-screen shade, separate loading indicator or status panel.
+
+Swipe upward 64 CSS pixels from the initial press to cancel immediately, even
+during startup. Moving back never resumes that press, and release afterward
+cannot submit. Sideways/downward movement and small upward movement do not cancel;
+the initial press still must be in the input, not File/microphone/send buttons.
+Cancellation discards audio rather than retaining it for retry. Capture loss,
+system cancellation, window blur, page hiding, resize, Escape/Tab and input
+replacement also interrupt a hold. Unrelated chat scrolling does not.
+
+At 120 seconds, a held gesture stops capture and retains its bounded audio but
+does not commit or insert anything until release. Swiping up still discards it.
+The independent microphone button keeps its existing automatic
+stop-and-transcribe behavior at the same limit.
+
+Focused or nonempty inputs keep native editing. To paste into an empty unfocused
+input, tap first, then use native long-press paste. Keyboard Tab still focuses
+the real textarea; the gesture layer adds no tab stop. The independent microphone
+button remains the accessible alternative and retains its existing behavior.
+No host API, SDK pin or backend protocol change is required.
+
+The layer suppresses selection and touch callouts rather than intercepting a
+long press on an editable textarea. This is not a claim of iOS Safari/PWA
+hardware compatibility: microphone permission, transient activation and OS
+gesture behavior still require real-device verification. If microphone startup
+cannot complete while held, release safely and use the microphone button.
 
 ## File-only configuration
 
@@ -144,8 +181,8 @@ pnpm typecheck
 pnpm test
 pnpm build
 # After committing clean source; use a new output directory.
-node scripts/package.mjs module-output-0.2.0
-node scripts/verify-package.mjs module-output-0.2.0/cockpit-speech-0.2.0.tgz
+node scripts/package.mjs module-output-0.3.0
+node scripts/verify-package.mjs module-output-0.3.0/cockpit-speech-0.3.0.tgz
 ```
 
 Archives contain runtime code, worklet assets, licenses and exact source/SDK

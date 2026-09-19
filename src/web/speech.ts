@@ -10,6 +10,8 @@ interface Identity { id: string; sessionId: string; purpose: string }
 export interface Recovery extends Identity { text: string }
 export interface SpeechSnapshot {
   phase: 'idle' | 'permission' | 'recording' | 'stopping' | 'transcribing' | 'retry';
+  holdingAtLimit: boolean;
+  level: number;
   error: string | null;
   notice: string | null;
   recovery: Recovery | null;
@@ -40,7 +42,7 @@ export function insertText(text: string, addition: string, selection: Selection)
 }
 
 export class SpeechService {
-  private state: SpeechSnapshot = { phase: 'idle', error: null, notice: null, recovery: null, focus: null };
+  private state: SpeechSnapshot = { phase: 'idle', holdingAtLimit: false, level: 0, error: null, notice: null, recovery: null, focus: null };
   private readonly listeners = new Set<() => void>();
   private target: Target | null = null;
   private operation: Operation | null = null;
@@ -100,7 +102,7 @@ export class SpeechService {
     return !this.disposed && this.operation === operation && !operation.controller.signal.aborted
       && !!this.target && matches(operation.identity, identity(this.target.draft)) && this.hostReady(operation.identity.sessionId);
   }
-  async start(): Promise<void> {
+  async start(mode: 'button' | 'hold' = 'button'): Promise<void> {
     if (!this.canStart()) return;
     const target = this.target!;
     const snapshot = target.draft.getSnapshot();
@@ -119,17 +121,26 @@ export class SpeechService {
       return;
     }
     this.operation = operation;
-    this.update({ phase: 'permission', error: null, notice: null, focus: null });
+    this.update({ phase: 'permission', holdingAtLimit: false, level: 0, error: null, notice: null, focus: null });
     try {
       operation.preparation = this.options.prepare(operation.controller.signal, error => this.fail(operation, error), () => {
         operation.limited = true;
-        if (this.current(operation) && this.state.phase === 'recording') void this.stop();
+        if (this.current(operation) && this.state.phase === 'recording') {
+          if (mode === 'hold') this.update({ holdingAtLimit: true, level: 0 });
+          else void this.stop();
+        }
       });
-      const recording = await operation.preparation.start(this.options.session, operation.context);
+      const recording = await operation.preparation.start(this.options.session, operation.context, {
+        waitForStop: mode === 'hold',
+        onLevel: value => { if (this.current(operation) && this.state.phase === 'recording') this.update({ level: value }); },
+      });
       if (!this.current(operation)) { recording.cancel(); return; }
       operation.recording = recording;
       this.update({ phase: 'recording' });
-      if (operation.limited) void this.stop();
+      if (operation.limited) {
+        if (mode === 'hold') this.update({ holdingAtLimit: true, level: 0 });
+        else void this.stop();
+      }
     } catch (error) { this.fail(operation, error); }
   }
   async stop(): Promise<void> {
@@ -155,7 +166,7 @@ export class SpeechService {
     if (!operation.recording) return;
     const completion = operation.completion = {};
     const current = () => this.current(operation) && operation.completion === completion;
-    this.update({ phase: 'stopping', error: null });
+    this.update({ phase: 'stopping', holdingAtLimit: false, level: 0, error: null });
     try {
       const text = await operation.recording[retry ? 'retry' : 'stop'](() => {
         if (current()) this.update({ phase: 'transcribing' });
@@ -224,13 +235,13 @@ export class SpeechService {
     if (operation.recording?.retryable()) {
       this.release(operation);
     } else this.finish(operation);
-    this.update({ phase: 'retry' });
+    this.update({ phase: 'retry', holdingAtLimit: false, level: 0 });
     this.error(error);
   }
   cancel(_notice = '语音输入已取消。'): void {
     if (!this.operation) return;
     this.finish(this.operation);
-    this.update({ phase: 'idle', notice: null, error: null });
+    this.update({ phase: 'idle', holdingAtLimit: false, level: 0, notice: null, error: null });
   }
   dispose = (): void => {
     if (this.disposed) return;

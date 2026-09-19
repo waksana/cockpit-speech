@@ -21,9 +21,19 @@ The returned WebSocket origin/path is locally constructed and strictly validated
   one minute and stops reusing them 30 seconds before Azure expiry. Retry requests
   fresh credentials, also picking up changed file configuration. Aborted requests
   cannot populate the cache. Disposal clears it.
-- `capture.ts` initiates microphone permission and context resume in the click,
+- `capture.ts` initiates microphone permission and context resume together,
   without waiting for credentials. It watches device/context failure from setup,
   checks final readiness, and consumes the packaged worklet's ordered messages.
+  If the context is still suspended after microphone permission resolves, it
+  calls resume once more while the document is capturing. WebKit can leave the
+  initial pre-permission resume pending when a hold lacks transient activation;
+  the new call re-evaluates that condition. It does not acquire a second stream,
+  loop, revive a cancelled capture, or mark the editor ready before the graph is
+  actually running. The existing bounded startup timeout still applies.
+- A short input-layer release records tap intent; its synchronous click handler
+  focuses the real textarea. Focusing during pointerup removes the gesture layer
+  before touchend/click and can disrupt mobile gesture completion. Cancelled,
+  held, superseded and newly blocked taps cannot focus from a trailing click.
 - `capture-worklet.ts` and `pcm.ts` produce 24 kHz mono little-endian PCM16 chunks.
   Native Web Audio resamples the requested 24 kHz context; the streaming encoder
   also handles other context sample rates. Render-sample counting bounds the
@@ -58,11 +68,42 @@ The native send remains host-owned. Prompt/ask/plan and free-text gates are
 unchanged; File remains prompt-only on the left.
 
 One circular button conveys all operational states: idle microphone, disabled
-startup spinner, recording stop square, disabled sending/transcription spinner,
+startup spinner, recording red volume dot, disabled sending/transcription spinner,
 red manual retry. Accessible names and title include the safe failure reason.
 There is no timer, phase text, success/error panel or global error notification.
 Only draft-conflict text recovery uses the existing `composer` wrapper after the
 whole row; it cannot redirect insertion to another draft.
+
+`hold.ts` owns a single captured pointer and a 300 ms timer. The actual textarea
+stays mounted inside a module-owned flex region. Only an empty, unfocused,
+writable input gets the non-editing overlay; focus/blur chain the native handlers.
+The layer is transparent; its hint is leading-aligned and vertically centered. Only while it is
+present does Base receive an empty placeholder, avoiding overlapping hints;
+native placeholder text returns when the layer disappears.
+Tab goes straight to the textarea. The overlay suppresses native touch selection,
+not the textarea's editing behavior. Bounds come from the public editor ref,
+not private DOM queries. Captured/coalesced coordinates are checked on move and
+release for a 64 CSS pixel upward swipe from the press origin. Once cancelled,
+ownership and timer clear before capture release, then existing speech
+cancellation destroys the recording. Other directions can leave the original
+input without cancelling. Release while starting cancels; only release during
+recording stops/transcribes. Unmount, draft/host invalidation, visibility loss,
+window blur, resize and Escape/Tab cancel; unrelated scrolling does not.
+The independent microphone button and post-stop retry/recovery paths are unchanged.
+
+Both hold and microphone-button recordings use the same fixed button for all
+feedback: startup spinner, red RMS-driven dot, then submission/transcription
+spinner. No full-screen portal, separate loading overlay or recording panel is
+mounted. The dot uses 28% of the button content size and scales only from 1 to 2,
+with clipping as a final guard; it never exceeds the button. RMS comes from the
+existing PCM16 chunks (no second microphone or analyser). The level callback is
+guarded by exact operation identity and reset on exit for either entry mode.
+
+Hold starts pass `waitForStop` to the recording preparation. At the render or wall
+limit capture stops, but the transport queue's sealed view stays false until the
+explicit release calls stop. Thus a capped buffer cannot auto-commit while
+still held. Upward cancellation clears it even after capture has stopped. The
+microphone button's limit policy is unchanged.
 
 ## Existing validation tools
 
@@ -80,6 +121,8 @@ never production configuration or user recordings. They cover:
   stale callbacks, fresh retry cursors, cleanup and actual service lease release.
 - Single-button states, no notification bars, native props/ref/IME preservation,
   exact draft/revision conflicts, retained recovery and no automatic submission.
+- Tap/hold timing, upward swipe despite capture, irreversible cancellation,
+  startup release, late permission grants, capture loss and interruption cleanup.
 - Source/SDK identity, package closure and reproducibility.
 
 Run `pnpm typecheck`, `pnpm test`, then `pnpm build`. Packaging requires a fresh

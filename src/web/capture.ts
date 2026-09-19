@@ -1,6 +1,7 @@
 import { abortError, isRecord, MAX_SECONDS, SpeechError } from '../shared/limits.ts';
 import { abortable } from './async.ts';
 import { PCM_CHUNK, PCM_LIMIT } from './pcm.ts';
+import { pcmLevel } from './level.ts';
 
 export interface CaptureEnvironment {
   secure: boolean;
@@ -37,13 +38,15 @@ export class AudioCapture {
   private readonly fail: (error: SpeechError) => void;
   private readonly limit: () => void;
   private readonly env: CaptureEnvironment;
+  private readonly level: (value: number) => void;
   constructor(
     signal: AbortSignal,
     fail: (error: SpeechError) => void,
     limit: () => void,
     env = browserCapture(),
+    level: (value: number) => void = () => {},
   ) {
-    this.fail = fail; this.limit = limit; this.env = env;
+    this.fail = fail; this.limit = limit; this.env = env; this.level = level;
     signal.throwIfAborted();
     signal.addEventListener('abort', this.cancel, { once: true, signal: this.lifetime.signal });
     this.ready = this.start();
@@ -62,12 +65,17 @@ export class AudioCapture {
         else if (running || context.state === 'closed') this.broken(new SpeechError('AUDIO_FAILED', '音频设备已暂停或关闭。'));
       };
       const resume = context.resume();
-      // Permission and audio activation are initiated in the click, independently of credentials.
+      // Permission and audio activation start together, independently of credentials.
       const permission = this.env.getUserMedia({ audio: { channelCount: 1, echoCancellation: true, noiseSuppression: true }, video: false })
-        .then(stream => {
+        .then(async stream => {
           if (signal.aborted || this.closed) { for (const track of stream.getTracks()) track.stop(); signal.throwIfAborted(); throw abortError(); }
           this.microphone = stream;
           for (const track of stream.getTracks()) track.onended = () => this.broken(new SpeechError('AUDIO_FAILED', '麦克风已断开。'));
+          // WebKit can leave the pre-permission resume pending until retried while capturing.
+          if (context.state === 'suspended') {
+            signal.throwIfAborted();
+            await context.resume();
+          }
           return stream;
         });
       const module = context.audioWorklet.addModule(new URL('./capture-worklet.js', import.meta.url));
@@ -84,6 +92,7 @@ export class AudioCapture {
           && data.buffer.byteLength > 0 && data.buffer.byteLength <= PCM_CHUNK * 2
           && data.buffer.byteLength % 2 === 0 && this.bytes + data.buffer.byteLength <= PCM_LIMIT * 2) {
           this.chunks.push(new Uint8Array(data.buffer)); this.bytes += data.buffer.byteLength;
+          this.level(pcmLevel(data.buffer));
         } else if (isRecord(data) && data.type === 'ended' && typeof data.limited === 'boolean') {
           this.sealed = true; this.cleanup(); this.resolveStop?.();
           if (data.limited) this.limit();
