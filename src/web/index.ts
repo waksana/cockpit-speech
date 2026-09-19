@@ -26,7 +26,7 @@ export const activate: ActivateFrontend = context => {
     id: 'speech',
     create: () => new SpeechService({
       signal: context.signal, host: context.state.host, chatWindow: context.state.chatWindow,
-      prepare: prepareRecording, session: sessionClient(context.request), report: context.report,
+      prepare: prepareRecording, session: sessionClient(context.request, context.signal), report: context.report,
     }),
     dispose: service => service.dispose(),
   }).get();
@@ -39,11 +39,9 @@ export const activate: ActivateFrontend = context => {
   function SpeechPanel() {
     const state = React.useSyncExternalStore(speech.subscribe, speech.getSnapshot);
     React.useSyncExternalStore(context.state.host.subscribe, context.state.host.getSnapshot);
-    const active = state.phase !== 'idle';
+    const active = state.phase !== 'idle' && state.phase !== 'retry';
     const recovery = state.recovery;
-    return (!active && (state.error || state.notice || recovery)) ? h('section', { className: 'cockpit-speech-panel', 'aria-label': '语音输入' },
-      state.error ? h('p', { role: 'alert' }, state.error) : null,
-      state.notice ? h('p', { role: 'status', 'aria-live': 'polite' }, state.notice) : null,
+    return (!active && recovery) ? h('section', { className: 'cockpit-speech-panel', 'aria-label': '识别结果恢复' },
       recovery ? h(React.Fragment, null,
         h('label', null, '识别结果（未发送）', h('textarea', { className: 'ck-input', value: recovery.text, readOnly: true, rows: 4 })),
         h('div', { className: 'cockpit-speech-recovery-actions' },
@@ -85,22 +83,24 @@ export const activate: ActivateFrontend = context => {
           input.current?.focus();
           input.current?.setSelectionRange(focus.selection.start, focus.selection.end);
         }, [state.focus, draft.id, snapshot.revision, props.disabled]);
-        const active = state.phase !== 'idle';
+        const retry = state.phase === 'retry';
+        const active = state.phase !== 'idle' && !retry;
         const busy = active && state.phase !== 'recording';
         const label = state.phase === 'recording' ? '停止录音并转写'
-          : state.phase === 'checking' ? '正在获取语音连接凭据'
-            : state.phase === 'permission' ? '正在准备麦克风和语音连接'
+          : state.phase === 'permission' ? '正在启动麦克风'
               : state.phase === 'stopping' ? '正在提交录音'
-                : state.phase === 'transcribing' ? '正在转写录音' : '开始语音输入';
-        const disabled = busy || (!active && (props.disabled || props.sendBlocked || !speech.canStart()));
+                : state.phase === 'transcribing' ? '正在转写录音'
+                  : retry ? `语音失败，点击重试。${state.error ?? ''}` : '开始语音输入';
+        const disabled = busy || (!active && (props.disabled || props.sendBlocked || !(retry ? speech.canRetry() : speech.canStart())));
         const button = h('button', {
-          type: 'button', className: 'ck-icon-button cockpit-speech-mic', disabled,
-          'aria-label': label, title: label, 'aria-pressed': state.phase === 'recording', 'aria-busy': busy,
+          type: 'button', className: `ck-icon-button cockpit-speech-mic${retry ? ' cockpit-speech-retry' : ''}`, disabled,
+          'aria-label': label, title: state.error ?? label, 'aria-pressed': state.phase === 'recording', 'aria-busy': busy,
           onClick: () => {
             if (state.phase === 'recording') void speech.stop();
+            else if (retry) void speech.retry();
             else if (!busy) void speech.start();
           },
-        }, busy ? h('span', { className: 'cockpit-speech-spinner', 'aria-hidden': true }) : h(Icon, { name: active ? 'square' : 'mic' }));
+        }, busy ? h('span', { className: 'cockpit-speech-spinner', 'aria-hidden': true }) : h(Icon, { name: retry ? 'retry' : active ? 'square' : 'mic' }));
         return h(React.Fragment, null,
           h(Base, { ...props, editorRef: ref }), button,
         );

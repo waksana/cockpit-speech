@@ -9,7 +9,8 @@ import { MAX_JSON_BYTES } from '../shared/limits.ts';
 
 const request = (body: unknown, signal = new AbortController().signal): ModuleRequest => ({ params: {}, query: {}, headers: {}, body, signal });
 const config = { endpoint: 'https://synthetic.openai.azure.com', key: 'synthetic-key', deployment: 'dictation' };
-const session = { clientSecret: 'ephemeral-fixture', expiresAt: 2_000_000_000, callsUrl: `${config.endpoint}/openai/v1/realtime/calls` };
+const session = { clientSecret: 'ephemeral-fixture', expiresAt: 2_000_000_000,
+  socketUrl: 'wss://synthetic.openai.azure.com/openai/v1/realtime?intent=transcription', deployment: config.deployment };
 test('backend has one credential route, rereads file configuration and never returns the resource key', async () => {
   const dataRoot = resolve('.test-work', randomUUID()); await mkdir(dataRoot, { recursive: true });
   const controller = new AbortController();
@@ -33,11 +34,11 @@ test('backend has one credential route, rereads file configuration and never ret
     const file = join(dataRoot, 'azure-openai.json');
     await writeFile(file, JSON.stringify(config));
     await writeFile(file, JSON.stringify({ ...config, key: 'updated-synthetic-key' }));
-    const response = await route.handler(request({ context: 'captured context' }));
+    const response = await route.handler(request({}));
     assert.deepEqual(response.body, session); assert.equal(response.headers?.['Cache-Control'], 'no-store');
     assert.doesNotMatch(JSON.stringify(response), /updated-synthetic-key/);
     assert.equal(requests, 1);
-    for (const body of [{ key: 'browser-key' }, { audio: 'AA==' }, { endpoint: 'https://example.com' }]) {
+    for (const body of [{ context: 'private' }, { key: 'browser-key' }, { audio: 'AA==' }, { endpoint: 'https://example.com' }]) {
       assert.equal((await route.handler(request(body))).status, 400);
     }
     backend.dispose?.();

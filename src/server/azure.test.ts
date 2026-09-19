@@ -6,15 +6,13 @@ import { MAX_RESPONSE_BYTES } from '../shared/limits.ts';
 const config = { endpoint: 'https://synthetic.openai.azure.com', key: 'synthetic-not-a-real-key', deployment: 'dictation' };
 const signal = () => new AbortController().signal;
 const response = () => ({ value: 'synthetic-short-lived-secret', expires_at: Math.floor(Date.now() / 1000) + 60, session: { type: 'transcription' } });
-test('session input accepts only bounded optional context, never audio, credentials or model options', () => {
+test('session input accepts only an empty object, never context, audio, credentials or model options', () => {
   assert.deepEqual(parseInput({}), {});
-  for (const context of ['a'.repeat(1_000), '😀'.repeat(1_000)]) assert.deepEqual(parseInput({ context }), { context });
   for (const invalid of [{ key: 'x' }, { endpoint: 'https://x' }, { audio: 'AA==' }, { model: 'other' },
     { context: '😀'.repeat(1_001) }, { context: 'a'.repeat(1_001) }, { context: 1 }, null]) assert.throws(() => parseInput(invalid));
 });
-test('issuer uses the key only server-side, fixed GA path, transcription-only mode and captured context', async () => {
+test('issuer uses the key only server-side, fixed GA path and context-free transcription credentials', async () => {
   let calls = 0;
-  const context = '😀'.repeat(995) + 'final';
   const issued = response();
   const issuer = azureSessionIssuer(async (url, init) => {
     calls++;
@@ -22,29 +20,24 @@ test('issuer uses the key only server-side, fixed GA path, transcription-only mo
     assert.deepEqual(init?.headers, { 'api-key': config.key, 'Content-Type': 'application/json' });
     assert.equal(init?.redirect, 'error'); assert.equal(init?.method, 'POST');
     const body = JSON.parse(String(init?.body));
-    assert.deepEqual(body, definition(config.deployment, context));
+    assert.deepEqual(body, definition(config.deployment));
     assert.equal(body.session.type, 'transcription');
     assert.equal(body.session.audio.input.turn_detection, null);
     assert.equal(body.session.audio.input.transcription.model, 'dictation');
     assert.ok(typeof body.session.audio.input.transcription.prompt === 'string');
-    assert.ok(body.session.audio.input.transcription.prompt.endsWith(context));
-    assert.equal(body.session.audio.input.transcription.prompt, `Reference vocabulary:\n${context}`);
-    assert.equal([...body.session.audio.input.transcription.prompt].length, 1022);
+    assert.equal(body.session.audio.input.transcription.prompt, '');
     return Response.json(issued);
   });
-  const result = await issuer.issue(config, { context }, signal());
-  assert.deepEqual(result, { clientSecret: issued.value, expiresAt: issued.expires_at, callsUrl: `${config.endpoint}/openai/v1/realtime/calls` });
+  const result = await issuer.issue(config, {}, signal());
+  assert.deepEqual(result, { clientSecret: issued.value, expiresAt: issued.expires_at,
+    socketUrl: 'wss://synthetic.openai.azure.com/openai/v1/realtime?intent=transcription', deployment: 'dictation' });
   assert.doesNotMatch(JSON.stringify(result), /synthetic-not-a-real-key/);
   assert.equal(calls, 1);
 });
-test('full context and label stay within Azure prompt budget; absent context omits the prompt', () => {
-  for (const context of ['a'.repeat(1000), '😀'.repeat(1000)]) {
-    const transcription = definition(config.deployment, context).session.audio.input.transcription;
-    assert.ok(typeof transcription.prompt === 'string');
-    assert.equal([...transcription.prompt].length, 1022);
-    assert.ok([...transcription.prompt].length <= 1024);
-  }
-  assert.equal('prompt' in definition(config.deployment).session.audio.input.transcription, false);
+test('credentials have a bounded lifetime, empty prompt and explicit PCM format', () => {
+  assert.equal(definition(config.deployment).expires_after.seconds, 600);
+  assert.deepEqual(definition(config.deployment).session.audio.input.format, { type: 'audio/pcm', rate: 24000 });
+  assert.equal(definition(config.deployment).session.audio.input.transcription.prompt, '');
 });
 test('issuer rejects missing/expired credentials and conversation sessions', async () => {
   for (const value of [{}, { ...response(), value: '' }, { ...response(), expires_at: 1 },

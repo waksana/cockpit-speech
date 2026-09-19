@@ -3,7 +3,7 @@ import { parseSession } from '../shared/session.ts';
 import type { SpeechSession } from '../shared/session.ts';
 
 export type Request = (path: string, init?: RequestInit) => Promise<Response>;
-export type CreateSession = (context: string | undefined, signal: AbortSignal) => Promise<SpeechSession>;
+export type CreateSession = (signal: AbortSignal, refresh?: boolean) => Promise<SpeechSession>;
 
 async function moduleResponse(response: Response, signal: AbortSignal): Promise<unknown> {
   if (!response.body) throw new SpeechError('HTTP_FAILED', '语音模块返回了空响应。');
@@ -37,23 +37,34 @@ async function moduleResponse(response: Response, signal: AbortSignal): Promise<
   return value;
 }
 
-export function sessionClient(request: Request): CreateSession {
-  return async (context, signal) => {
+export function sessionClient(request: Request, lifetime?: AbortSignal): CreateSession {
+  let cached: { session: SpeechSession; until: number } | undefined;
+  lifetime?.addEventListener('abort', () => { cached = undefined; }, { once: true });
+  return async (signal, refresh = false) => {
+    signal.throwIfAborted();
+    lifetime?.throwIfAborted();
+    if (refresh) cached = undefined;
+    if (cached && cached.until > Date.now()) return cached.session;
     const deadline = AbortSignal.timeout(35_000);
-    const combined = AbortSignal.any([signal, deadline]);
+    const combined = AbortSignal.any([signal, deadline, ...(lifetime ? [lifetime] : [])]);
     try {
       combined.throwIfAborted();
       const response = await request('/session', {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(context ? { context } : {}), signal: combined,
+        body: '{}', signal: combined,
       });
       const value = await moduleResponse(response, combined);
-      return parseSession(value);
+      combined.throwIfAborted();
+      const session = parseSession(value);
+      // Bound stale on-disk configuration to one minute without checking it on every click.
+      cached = { session, until: Math.min(Date.now() + 60_000, session.expiresAt * 1000 - 30_000) };
+      return session;
     } catch (error) {
       signal.throwIfAborted();
-      if (deadline.aborted) throw new SpeechError('SESSION_TIMEOUT', '获取语音连接凭据超时，未开始录音，请稍后重试。');
+      lifetime?.throwIfAborted();
+      if (deadline.aborted) throw new SpeechError('SESSION_TIMEOUT', '获取语音连接凭据超时，可重试已保留的录音。');
       if (error instanceof SpeechError) throw error;
-      throw new SpeechError('HTTP_FAILED', '无法连接语音模块获取短期凭据，未开始录音，请检查连接后重试。');
+      throw new SpeechError('HTTP_FAILED', '无法连接语音模块获取短期凭据，请检查连接后重试。');
     }
   };
 }

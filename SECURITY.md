@@ -13,8 +13,14 @@ Azure OpenAI hostname allowlist; redirects are rejected. A short-lived Azure
 credential is deliberately returned to the browser and kept in memory, not
 logged or persisted. It is sensitive and must not be included in reports.
 
-Context goes to Azure during credential issuance; audio streams directly from
-the browser during recording. Cancel cannot retract transmitted data or charges.
+Credential requests contain no context or audio. Each browser WebSocket sets the
+recording's prompt directly on Azure before sending buffered/live audio. The
+short-lived bearer appears in the WebSocket URL's Authorization query parameter;
+redact the entire query in browser/network diagnostics. Never log a socket URL.
+Cancel cannot retract transmitted data or charges; replay after an uncertain
+commit can cause duplicate billing. Credentials are cached for at most one minute
+and refreshed for explicit retry, so file configuration changes can briefly lag.
+Already-open connections do not automatically pick up file changes.
 The credential is not an application-enforced one-use or 120-second billing
 quota. Protect the host's authenticated module request boundary; credential
 issuance concurrency is not a global limit on active Azure sessions.
@@ -28,3 +34,11 @@ Draft insertion is not permission to submit. The module never invokes native
 session/ask/plan APIs, schedules, host audio proxies or process
 control. Context text is untrusted reference vocabulary, never executable
 instructions to this module.
+
+At most 120 seconds of PCM audio is retained in browser memory (5.76 MB raw, plus
+temporary encoding overhead). Failure preserves it for explicit replay into a
+new connection, never a new draft. Success, target invalidation, navigation,
+visibility loss, host disconnect or module unload clears the recording.
+There is no IndexedDB/localStorage, file upload, recording log or audio disk cache.
+Physical microphone permission and a cached Azure credential do not bypass the
+host's free-text gates or the module's exact-draft ownership checks.

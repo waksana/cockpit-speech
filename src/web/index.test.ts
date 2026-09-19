@@ -103,14 +103,14 @@ test('input middleware preserves native textarea props and keeps decision microp
       assert.equal(mic.props['aria-label'], '开始语音输入');
       assert.equal(mic.props.disabled, sendBlocked);
       effects.pop()!();
-      for (const current of ['checking', 'permission', 'recording', 'stopping', 'transcribing'] as const) {
+      for (const current of ['permission', 'recording', 'stopping', 'transcribing', 'retry'] as const) {
         phase = current;
         const rendered = Wrapped({ draft, operation, disabled: false, sendBlocked: false, value: '', onSubmit: nativeSubmit, onChange: nativeTextChange });
         const button = rendered.children[1] as Element;
-        const busy = current !== 'recording';
-        assert.equal(button.props.disabled, busy);
+        const busy = current !== 'recording' && current !== 'retry';
+        assert.equal(button.props.disabled, busy || current === 'retry');
         assert.equal(button.props['aria-busy'], busy);
-        assert.equal(button.props['aria-pressed'], !busy);
+        assert.equal(button.props['aria-pressed'], current === 'recording');
         assert.notEqual(button.props['aria-label'], '取消语音输入');
         const icon = button.children[0] as Element;
         assert.equal(icon.type === 'span', busy);
@@ -133,14 +133,11 @@ test('input middleware preserves native textarea props and keeps decision microp
     assert.equal((tree.children[0] as Element).props, props);
     assert.equal(typeof (tree.children[1] as Element).type, 'function', 'feedback follows the whole composer');
     const Panel = (tree.children[1] as Element).type as () => Element | null;
-    for (const current of ['checking', 'permission', 'recording', 'stopping', 'transcribing'] as const) {
+    for (const current of ['permission', 'recording', 'stopping', 'transcribing', 'retry'] as const) {
       phase = current;
       assert.equal(Panel(), null, 'no phase text, timer or cancel panel');
     }
     phase = 'idle'; error = 'Synthetic device disconnected';
-    const panel = Panel()!;
-    const alert = panel.children[0] as Element;
-    assert.equal(alert.props.role, 'alert');
-    assert.deepEqual(alert.children, [error]);
+    assert.equal(Panel(), null, 'errors never create a notification bar');
   } finally { for (const effect of effects) effect(); for (const dispose of disposers) dispose(); }
 });

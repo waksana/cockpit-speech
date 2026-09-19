@@ -45,6 +45,7 @@ function fixture(options: { permission?: boolean; purpose?: DraftPurpose; ready?
   });
   const permission = deferred<Recording>();
   const result = deferred<string>();
+  const retryResult = deferred<string>();
   const controller = new AbortController();
   const original = draft('draft-1', options.purpose);
   const reports: Error[] = [];
@@ -58,8 +59,13 @@ function fixture(options: { permission?: boolean; purpose?: DraftPurpose; ready?
   let capturedContext: string | undefined;
   let capturedSignal: AbortSignal | undefined;
   let recorderFailure!: (error: SpeechError) => void;
+  let ready: Promise<void> = Promise.resolve();
+  let readinessError: unknown;
+  let retryable = true;
   const recording: Recording = {
-    stop: async committed => { stops++; requests++; committed?.(); return result.promise; },
+    stop: async committed => { stops++; await ready; if (readinessError) throw readinessError; requests++; committed?.(); return result.promise; },
+    retry: async committed => { requests++; committed?.(); return retryResult.promise; },
+    retryable: () => retryable,
     cancel: () => { cancelled++; },
   };
   const service = new SpeechService({
@@ -68,19 +74,25 @@ function fixture(options: { permission?: boolean; purpose?: DraftPurpose; ready?
       capturedSignal = signal;
       recorderFailure = fail; limitReached = limit;
       return {
-        start: async () => { captures++; return options.permission ? permission.promise : recording; },
+        start: async (session, context) => {
+          captures++; capturedContext = context;
+          ready = session(signal).then(() => {}, error => { readinessError = error; });
+          return options.permission ? permission.promise : recording;
+        },
         cancel: () => { preparationsCancelled++; },
       };
     },
-    session: async (context, signal) => {
-      readyCalls++; capturedContext = context;
+    session: async signal => {
+      readyCalls++;
       await options.ready?.(signal);
-      return { clientSecret: 'ephemeral-fixture', expiresAt: 2_000_000_000, callsUrl: 'https://synthetic.openai.azure.com/openai/v1/realtime/calls' };
+      return { clientSecret: 'ephemeral-fixture', expiresAt: 2_000_000_000,
+        socketUrl: 'wss://synthetic.openai.azure.com/openai/v1/realtime?intent=transcription', deployment: 'dictation' };
     },
     report: error => reports.push(error),
   });
   service.setTarget({ draft: original, disabled: false, sendBlocked: false, selection: () => ({ start: 6, end: 11 }) });
-  return { service, host, chatWindow, original, permission, result, controller, reports, recording,
+  return { service, host, chatWindow, original, permission, result, retryResult, controller, reports, recording,
+    setRetryable: (value: boolean) => { retryable = value; },
     values: () => ({ cancelled, stops, requests, captures, preparationsCancelled, readyCalls, capturedContext, capturedSignal }),
     limit: () => limitReached(), fail: (e: SpeechError) => recorderFailure(e) };
 }
@@ -93,7 +105,7 @@ test('prompt, ask and plan insert at the captured selection only after stop; con
     assert.equal(f.values().requests, 0);
     f.chatWindow.set({ ...f.chatWindow.getSnapshot(), messages: [] });
     const stopped = f.service.stop();
-    await Promise.resolve();
+    await new Promise<void>(resolve => setImmediate(resolve));
     assert.equal(f.service.getSnapshot().phase, 'transcribing');
     f.result.resolve('speech');
     await stopped;
@@ -135,16 +147,16 @@ test('a recovered result never redirects to another draft, including reused nati
   assert.equal(replacement.getSnapshot().text, 'hello world');
   assert.equal(f.service.getSnapshot().recovery?.text, 'recognized');
 });
-test('a finished draft notice cannot claim insertion into a newly selected answer', async t => {
+test('successful insertion never adds a notice above the editor', async t => {
   const f = fixture();
   t.after(() => f.service.dispose());
   await f.service.start();
   const stopped = f.service.stop();
   f.result.resolve('recognized');
   await stopped;
-  assert.ok(f.service.getSnapshot().notice);
+  assert.equal(f.service.getSnapshot().notice, null);
   f.service.clearTarget('unrelated');
-  assert.ok(f.service.getSnapshot().notice);
+  assert.equal(f.service.getSnapshot().notice, null);
   f.service.clearTarget(f.original.id);
   const answer = draft('answer', { kind: 'ask', requestId: 'new-question' });
   f.service.setTarget({ draft: answer, disabled: false, sendBlocked: false, selection: () => ({ start: 0, end: 0 }) });
@@ -180,7 +192,7 @@ test('cancelled transcription completion never writes to the original or replace
   assert.equal(f.service.getSnapshot().recovery, null);
   assert.equal(f.original.getSnapshot().blocks.length, 0);
 });
-test('recorder and transcription failures release leases and report one safe visible error', async t => {
+test('failures release leases, retain replay data and expose only a safe retry-button error', async t => {
   for (const failure of ['recorder', 'http']) {
     const f = fixture(); t.after(() => f.service.dispose());
     await f.service.start();
@@ -189,44 +201,46 @@ test('recorder and transcription failures release leases and report one safe vis
       const stop = f.service.stop(); f.result.reject(new Error('PRIVATE-DETAIL')); await stop;
     }
     assert.equal(f.original.getSnapshot().blocks.length, 0);
-    assert.equal(f.service.getSnapshot().phase, 'idle');
+    assert.equal(f.service.getSnapshot().phase, 'retry');
     assert.ok(f.service.getSnapshot().error);
-    assert.equal(f.reports.length, failure === 'http' ? 1 : 0, 'known errors are shown inline without a duplicate global alert');
+    assert.equal(f.reports.length, 0, 'no global error notification');
     assert.doesNotMatch(f.service.getSnapshot().error!, /PRIVATE/);
   }
 });
 
-test('configuration readiness gates capture, retries explicitly, and preserves click-time draft identity', async t => {
+test('credential failure never delays local capture and retains the original recording for explicit retry', async t => {
   let configured = false;
   const f = fixture({ ready: async () => {
     if (!configured) throw new SpeechError('CONFIG_UNAVAILABLE', '请创建 azure-openai.json。');
   } });
   t.after(() => f.service.dispose());
   await f.service.start();
+  assert.equal(f.service.getSnapshot().phase, 'recording');
+  await f.service.stop();
   assert.match(f.service.getSnapshot().error!, /azure-openai\.json/);
-  assert.equal(f.values().captures, 0);
+  assert.equal(f.values().captures, 1);
   assert.equal(f.values().requests, 0);
-  assert.equal(f.values().preparationsCancelled, 1);
+  assert.equal(f.values().preparationsCancelled, 0);
   assert.equal(f.original.getSnapshot().blocks.length, 0);
   configured = true;
-  await f.service.start();
-  assert.equal(f.values().readyCalls, 2);
+  const retry = f.service.retry(); f.retryResult.resolve('replayed'); await retry;
   assert.equal(f.values().captures, 1);
-  assert.equal(f.service.getSnapshot().phase, 'recording');
+  assert.equal(f.service.getSnapshot().phase, 'idle');
+  assert.equal(f.original.getSnapshot().text, 'hello replayed');
 });
 
-test('cancellation during readiness never acquires the microphone, even if readiness completes late', async t => {
+test('cancellation while credentials are pending stops local capture and ignores late readiness', async t => {
   const ready = deferred<void>();
   let signal!: AbortSignal;
   const f = fixture({ ready: value => { signal = value; return ready.promise; } });
   t.after(() => f.service.dispose());
   const starting = f.service.start();
-  assert.equal(f.service.getSnapshot().phase, 'checking');
+  assert.equal(f.service.getSnapshot().phase, 'permission');
   f.service.cancel();
   assert.equal(signal.aborted, true);
   ready.resolve();
   await starting;
-  assert.equal(f.values().captures, 0);
+  assert.equal(f.values().captures, 1);
   assert.equal(f.values().requests, 0);
   assert.equal(f.original.getSnapshot().blocks.length, 0);
 });
@@ -245,7 +259,7 @@ test('reaching the recording limit automatically transcribes once without native
   assert.equal(f.original.getSnapshot().text, 'hello bounded speech');
   assert.equal(f.original.getSnapshot().blocks.length, 0);
   assert.equal(f.service.getSnapshot().phase, 'idle');
-  assert.match(f.service.getSnapshot().notice!, /两分钟/);
+  assert.equal(f.service.getSnapshot().notice, null);
 });
 test('pending, unconfirmed, peer blocks and free-text gates prevent capture and recovery insertion', async t => {
   const f = fixture(); t.after(() => f.service.dispose());
@@ -271,3 +285,45 @@ test('double stop sends once; peer block appearing during transcription retains 
   assert.equal(f.service.canInsert(), false);
   assert.deepEqual(f.original.getSnapshot().blocks.map(x => x.id), ['peer']);
 });
+
+test('retry preserves original revision/context, ignores superseded completions and releases every lease', async t => {
+  const f = fixture(); t.after(() => f.service.dispose());
+  await f.service.start();
+  const old = f.service.stop();
+  await turn();
+  f.fail(new SpeechError('NETWORK', 'Disconnected'));
+  assert.equal(f.original.getSnapshot().blocks.length, 0);
+  f.original.editText('manual correction');
+  f.chatWindow.set({ ...f.chatWindow.getSnapshot(), messages: [] });
+  const retry = f.service.retry();
+  assert.equal(f.original.getSnapshot().blocks.length, 1);
+  f.result.resolve('stale first result'); await old;
+  assert.equal(f.service.getSnapshot().recovery, null);
+  f.retryResult.resolve('retained recording'); await retry;
+  assert.equal(f.values().captures, 1);
+  assert.equal(f.values().capturedContext, 'initial context');
+  assert.equal(f.original.getSnapshot().text, 'manual correction');
+  assert.equal(f.service.getSnapshot().recovery?.text, 'retained recording');
+  assert.equal(f.original.getSnapshot().blocks.length, 0);
+});
+test('retained audio is discarded on target replacement, including reused request IDs', async t => {
+  const f = fixture({ purpose: { kind: 'ask', requestId: 'reused' } }); t.after(() => f.service.dispose());
+  await f.service.start(); f.fail(new SpeechError('NETWORK', 'Disconnected'));
+  assert.equal(f.service.canRetry(), true);
+  f.service.setTarget({ draft: draft('new-lifetime', { kind: 'ask', requestId: 'reused' }),
+    disabled: false, sendBlocked: false, selection: () => ({ start: 0, end: 0 }) });
+  assert.equal(f.service.canRetry(), false);
+  assert.equal(f.values().cancelled, 1);
+  assert.equal(f.original.getSnapshot().blocks.length, 0);
+});
+test('a failed or too-short capture retries microphone acquisition instead of replaying nonexistent audio', async t => {
+  const f = fixture(); t.after(() => f.service.dispose());
+  await f.service.start(); f.setRetryable(false);
+  f.fail(new SpeechError('AUDIO_TOO_SHORT', 'Too short'));
+  assert.equal(f.service.getSnapshot().phase, 'retry');
+  await f.service.retry();
+  assert.equal(f.values().captures, 2);
+  assert.equal(f.service.getSnapshot().phase, 'recording');
+});
+
+function turn() { return new Promise<void>(resolve => setImmediate(resolve)); }

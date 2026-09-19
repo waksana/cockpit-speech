@@ -9,7 +9,7 @@ export interface Target { draft: ModuleDraft; disabled: boolean; sendBlocked: bo
 interface Identity { id: string; sessionId: string; purpose: string }
 export interface Recovery extends Identity { text: string }
 export interface SpeechSnapshot {
-  phase: 'idle' | 'checking' | 'permission' | 'recording' | 'stopping' | 'transcribing';
+  phase: 'idle' | 'permission' | 'recording' | 'stopping' | 'transcribing' | 'retry';
   error: string | null;
   notice: string | null;
   recovery: Recovery | null;
@@ -19,6 +19,7 @@ interface Operation {
   identity: Identity; draft: ModuleDraft; revision: number; selection: Selection; text: string;
   controller: AbortController; release(): void; recording?: Recording; context?: string;
   preparation?: RecordingPreparation; limited?: boolean;
+  completion?: object;
 }
 export interface SpeechOptions {
   signal: AbortSignal;
@@ -79,7 +80,7 @@ export class SpeechService {
     this.target = null;
     this.update({ focus: null });
     if (this.operation) this.cancel('原输入框已关闭，语音输入已取消。');
-    else if (!this.state.recovery) this.update({ error: null, notice: null });
+    else if (!this.state.recovery) this.update({ phase: 'idle', error: null, notice: null });
   }
   focusTarget(selection?: Selection): void {
     const target = this.target;
@@ -112,18 +113,19 @@ export class SpeechService {
         release: target.draft.block('正在录音或转写，请完成后再发送。'),
         context,
       };
-    } catch { this.error(new SpeechError('DRAFT_UNAVAILABLE', '当前输入框已无法接受语音输入。')); return; }
+    } catch {
+      this.update({ phase: 'retry' });
+      this.error(new SpeechError('DRAFT_UNAVAILABLE', '当前输入框已无法接受语音输入。'));
+      return;
+    }
     this.operation = operation;
-    this.update({ phase: 'checking', error: null, notice: null, focus: null });
+    this.update({ phase: 'permission', error: null, notice: null, focus: null });
     try {
       operation.preparation = this.options.prepare(operation.controller.signal, error => this.fail(operation, error), () => {
         operation.limited = true;
         if (this.current(operation) && this.state.phase === 'recording') void this.stop();
       });
-      const session = await this.options.session(operation.context, operation.controller.signal);
-      if (!this.current(operation)) return;
-      this.update({ phase: 'permission' });
-      const recording = await operation.preparation.start(session);
+      const recording = await operation.preparation.start(this.options.session, operation.context);
       if (!this.current(operation)) { recording.cancel(); return; }
       operation.recording = recording;
       this.update({ phase: 'recording' });
@@ -133,12 +135,32 @@ export class SpeechService {
   async stop(): Promise<void> {
     const operation = this.operation;
     if (!operation?.recording || this.state.phase !== 'recording') return;
-    this.update({ phase: 'stopping' });
+    await this.complete(operation, false);
+  }
+  canRetry(): boolean {
+    if (this.state.phase !== 'retry' || !this.target || this.disposed) return false;
     try {
-      const text = await operation.recording.stop(() => {
-        if (this.current(operation)) this.update({ phase: 'transcribing' });
+      return this.writable(this.target) && (!this.operation || (this.current(this.operation) && !!this.operation.recording?.retryable()));
+    } catch { return false; }
+  }
+  async retry(): Promise<void> {
+    if (!this.canRetry()) return;
+    const operation = this.operation;
+    if (!operation) { await this.start(); return; }
+    try { operation.release = operation.draft.block('正在重试录音，请完成后再发送。'); }
+    catch (error) { this.fail(operation, error); return; }
+    await this.complete(operation, true);
+  }
+  private async complete(operation: Operation, retry: boolean): Promise<void> {
+    if (!operation.recording) return;
+    const completion = operation.completion = {};
+    const current = () => this.current(operation) && operation.completion === completion;
+    this.update({ phase: 'stopping', error: null });
+    try {
+      const text = await operation.recording[retry ? 'retry' : 'stop'](() => {
+        if (current()) this.update({ phase: 'transcribing' });
       });
-      if (!this.current(operation)) return;
+      if (!current()) return;
       this.finish(operation);
       const recovery = { ...operation.identity, text };
       this.update({ phase: 'idle', recovery });
@@ -152,11 +174,11 @@ export class SpeechService {
         operation.draft.editText(insertText(operation.text, text, operation.selection));
         const caret = Math.max(0, Math.min(operation.text.length, operation.selection.start)) + text.length;
         this.focusTarget({ start: caret, end: caret });
-        this.update({ recovery: null, notice: operation.limited ? '已到两分钟上限，自动停止并写入草稿。请检查后自行发送。' : '语音已写入草稿，请检查后自行发送。' });
+        this.update({ recovery: null, notice: null });
       } catch {
         this.error(new SpeechError('DRAFT_CONFLICT', '无法修改原输入框，识别结果已保留在下方。'));
       }
-    } catch (error) { this.fail(operation, error); }
+    } catch (error) { if (current()) this.fail(operation, error); }
   }
   canInsert(): boolean {
     if (!this.state.recovery || !this.target || this.disposed || this.operation) return false;
@@ -172,7 +194,7 @@ export class SpeechService {
       target.draft.editText(insertText(target.draft.getSnapshot().text, recovery.text, { start: selection.start, end: selection.start }));
       const caret = selection.start + recovery.text.length;
       this.focusTarget({ start: caret, end: caret });
-      this.update({ recovery: null, error: null, notice: '识别结果已插入原草稿，请检查后自行发送。' });
+      this.update({ recovery: null, error: null, notice: null });
     } catch { this.error(new SpeechError('DRAFT_CONFLICT', '无法修改原输入框，请复制已保留的识别结果。')); }
   }
   dismiss(): void {
@@ -182,7 +204,6 @@ export class SpeechService {
   private error(error: unknown): void {
     const safe = error instanceof SpeechError ? error : new SpeechError('SPEECH_FAILED', '录音或转写失败，请稍后重试。');
     this.update({ error: safe.message });
-    if (!(error instanceof SpeechError)) this.options.report(new Error(safe.message));
   }
   private finish(operation: Operation): void {
     if (this.operation !== operation) return;
@@ -190,18 +211,26 @@ export class SpeechService {
     operation.controller.abort();
     operation.preparation?.cancel();
     operation.recording?.cancel();
-    try { operation.release(); } catch { /* Revocation already releases the module's leases. */ }
+    this.release(operation);
+  }
+  private release(operation: Operation): void {
+    const release = operation.release;
+    operation.release = () => {};
+    try { release(); } catch { /* Revocation already releases the module's leases. */ }
   }
   private fail(operation: Operation, error: unknown): void {
     if (this.operation !== operation) return;
-    this.finish(operation);
-    this.update({ phase: 'idle' });
+    operation.completion = undefined;
+    if (operation.recording?.retryable()) {
+      this.release(operation);
+    } else this.finish(operation);
+    this.update({ phase: 'retry' });
     this.error(error);
   }
-  cancel(notice = '语音输入已取消。'): void {
+  cancel(_notice = '语音输入已取消。'): void {
     if (!this.operation) return;
     this.finish(this.operation);
-    this.update({ phase: 'idle', notice, error: null });
+    this.update({ phase: 'idle', notice: null, error: null });
   }
   dispose = (): void => {
     if (this.disposed) return;
