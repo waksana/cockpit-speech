@@ -77,7 +77,7 @@ whole row; it cannot redirect insertion to another draft.
 `hold.ts` owns a single captured pointer and a 300 ms timer. The actual textarea
 stays mounted inside a module-owned flex region. Only an empty, unfocused,
 writable input gets the non-editing overlay; focus/blur chain the native handlers.
-The layer is transparent and centers its hint in both axes. Only while it is
+The layer is transparent; its hint is leading-aligned and vertically centered. Only while it is
 present does Base receive an empty placeholder, avoiding overlapping hints;
 native placeholder text returns when the layer disappears.
 Tab goes straight to the textarea. The overlay suppresses native touch selection,

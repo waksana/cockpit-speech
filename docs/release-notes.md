@@ -5,7 +5,7 @@ installation, service restart, tag or release is performed by the source change.
 
 - Empty and unfocused writable inputs show a non-editing gesture layer. Tap to
   focus the original textarea; hold 300 ms to start local microphone acquisition.
-  The layer preserves the input's background and centers its hint; it temporarily
+  The layer preserves the input's background and uses a leading-aligned hint; it temporarily
   suppresses the native placeholder to avoid overlapping text.
 - Re-evaluate a still-suspended AudioContext once after microphone permission is
   granted. This addresses the observed iPhone path where the microphone and
