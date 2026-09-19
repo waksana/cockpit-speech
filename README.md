@@ -43,8 +43,9 @@ current caret, or discard. Only this conflict recovery adds a result panel.
 
 An empty, unfocused, writable input displays a non-editing gesture layer:
 **轻点输入，按住说话**. A short tap focuses the real textarea for typing or
-native selection/paste. Pressing immediately shows preparation feedback, but
-microphone acquisition still starts only after 300 ms. Once ready, the status
+native selection/paste. Before the 300 ms hold threshold, pressing does not
+show or announce recording status, change the layout or acquire the microphone.
+Preparation feedback starts only when microphone startup begins. Once ready, the status
 row's red dot changes size with captured volume; the button is a static red stop
 square. Text can appear while held. Release stops capture, uploads its remaining
 tail and waits for outstanding transcription, never sending a message.

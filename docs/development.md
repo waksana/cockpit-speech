@@ -128,8 +128,10 @@ Both hold and microphone-button recordings use the same status feedback.
 The status marker's 7px dot scales from 1 to 2; the stop icon never scales.
 RMS and elapsed time come from the existing PCM16 chunks (no second microphone,
 analyser or interval). Progress is guarded by exact operation identity.
-Press feedback is bound to the current draft and does not start audio before
-the hold threshold. Short-tap focus still uses the completed click.
+Pending presses belong only to `HoldGesture`, not the speech service snapshot.
+Before the hold threshold, no recording status row or live announcement is
+mounted and no audio starts. Preparation feedback follows the actual `permission`
+phase. Short-tap focus still uses the completed click.
 
 Hold starts pass `waitForStop` to the recording preparation. At the render or wall
 limit capture stops, but the transport queue's sealed view stays false until the

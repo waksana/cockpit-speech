@@ -194,8 +194,6 @@ test('failed-stream recovery can be inserted or discarded without a dead retaine
 });
 test('elapsed time follows captured samples and clear resets retained operations without changing drafts', async t => {
   const f = fixture(); t.after(() => f.service.dispose());
-  f.service.setPressing(f.original.id, true);
-  assert.equal(f.service.getSnapshot().pressing, true);
   await f.service.start('hold');
   f.level(0.2, 0, 7.9);
   assert.equal(f.service.getSnapshot().elapsedSeconds, 7);
@@ -206,7 +204,6 @@ test('elapsed time follows captured samples and clear resets retained operations
   f.service.clear();
   assert.equal(f.service.getSnapshot().phase, 'idle');
   assert.equal(f.service.getSnapshot().elapsedSeconds, 0);
-  assert.equal(f.service.getSnapshot().pressing, false);
   assert.equal(f.original.getSnapshot().blocks.length, 0);
   assert.equal(f.original.getSnapshot().text, 'hello world');
   f.level(0.5, 0, 19);

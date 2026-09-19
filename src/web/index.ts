@@ -40,8 +40,8 @@ export const activate: ActivateFrontend = context => {
   function SpeechStatus() {
     const state = React.useSyncExternalStore(speech.subscribe, speech.getSnapshot);
     React.useSyncExternalStore(context.state.host.subscribe, context.state.host.getSnapshot);
-    const preparing = state.phase === 'permission' || (state.phase === 'idle' && state.pressing);
-    if (state.phase === 'idle' && !state.recovery && !state.notice && !preparing) return null;
+    const preparing = state.phase === 'permission';
+    if (state.phase === 'idle' && !state.recovery && !state.notice) return null;
     const recording = state.phase === 'recording';
     const capturing = recording && !state.holdingAtLimit;
     const processing = state.phase === 'stopping' || state.phase === 'transcribing';
@@ -60,7 +60,7 @@ export const activate: ActivateFrontend = context => {
             : h(Icon, { name: state.holdingAtLimit ? 'pause' : 'error', className: 'cockpit-speech-status-icon' })),
       h('span', { className: 'ck-status-label', role: 'status', title: label }, label),
       recording ? h('span', { className: 'cockpit-speech-time', 'aria-label': `录音时长 ${state.elapsedSeconds} 秒` }, time) : null,
-      !recording && !(state.phase === 'idle' && state.pressing) ? h('button', {
+      !recording ? h('button', {
         type: 'button', className: 'ck-icon-button ck-status-action', 'aria-label': '清除本次语音',
         title: '清除本次录音、识别结果和错误，保留已有草稿', onClick: () => speech.clear(),
       }, h(Icon, { name: 'close', className: 'ck-icon-sm' })) : null);
@@ -113,10 +113,6 @@ export const activate: ActivateFrontend = context => {
           focus: () => input.current?.focus(),
         }), [draft]);
         const holding = React.useSyncExternalStore(gesture.subscribe, gesture.getSnapshot);
-        React.useLayoutEffect(() => {
-          speech.setPressing(draft.id, holding);
-          return () => speech.setPressing(draft.id, false);
-        }, [draft.id, holding]);
         React.useLayoutEffect(() => {
           const cancel = gesture.cancel;
           const visibility = () => { if (document.visibilityState !== 'visible') cancel(); };

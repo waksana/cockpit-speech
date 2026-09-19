@@ -10,7 +10,6 @@ interface Identity { id: string; sessionId: string; purpose: string }
 export interface Recovery extends Identity { text: string }
 export interface SpeechSnapshot {
   phase: 'idle' | 'permission' | 'recording' | 'stopping' | 'transcribing' | 'retry';
-  pressing: boolean;
   elapsedSeconds: number;
   holdingAtLimit: boolean;
   level: number;
@@ -48,7 +47,7 @@ export function insertText(text: string, addition: string, selection: Selection)
 }
 
 export class SpeechService {
-  private state: SpeechSnapshot = { phase: 'idle', pressing: false, elapsedSeconds: 0, holdingAtLimit: false, level: 0, error: null, notice: null, recovery: null, focus: null };
+  private state: SpeechSnapshot = { phase: 'idle', elapsedSeconds: 0, holdingAtLimit: false, level: 0, error: null, notice: null, recovery: null, focus: null };
   private readonly listeners = new Set<() => void>();
   private target: Target | null = null;
   private operation: Operation | null = null;
@@ -86,13 +85,9 @@ export class SpeechService {
   clearTarget(id: string): void {
     if (this.target?.draft.id !== id) return;
     this.target = null;
-    this.update({ focus: null, pressing: false, elapsedSeconds: 0 });
+    this.update({ focus: null, elapsedSeconds: 0 });
     if (this.operation) this.cancel('原输入框已关闭，语音输入已取消。');
     else if (!this.state.recovery) this.update({ phase: 'idle', error: null, notice: null });
-  }
-  setPressing(id: string, pressing: boolean): void {
-    if (this.target?.draft.id !== id || this.state.pressing === pressing) return;
-    this.update({ pressing });
   }
   focusTarget(selection?: Selection): void {
     const target = this.target;
@@ -266,7 +261,7 @@ export class SpeechService {
   hasRetainedRecording(): boolean { return !!this.operation?.recording?.retryable(); }
   clear(): void {
     if (this.operation) this.finish(this.operation);
-    this.update({ phase: 'idle', pressing: false, elapsedSeconds: 0, holdingAtLimit: false,
+    this.update({ phase: 'idle', elapsedSeconds: 0, holdingAtLimit: false,
       level: 0, recovery: null, focus: null, error: null, notice: null });
   }
   notifyCopyFailure(): void { this.error(new SpeechError('COPY_FAILED', '无法访问剪贴板，请手动选择并复制识别结果。')); }
@@ -300,7 +295,7 @@ export class SpeechService {
   cancel(_notice = '语音输入已取消。'): void {
     if (!this.operation) return;
     this.finish(this.operation);
-    this.update({ phase: 'idle', pressing: false, elapsedSeconds: 0, holdingAtLimit: false, level: 0, notice: null, error: null });
+    this.update({ phase: 'idle', elapsedSeconds: 0, holdingAtLimit: false, level: 0, notice: null, error: null });
   }
   dispose = (): void => {
     if (this.disposed) return;
