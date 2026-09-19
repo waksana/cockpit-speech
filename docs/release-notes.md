@@ -7,6 +7,10 @@ installation, service restart, tag or release is performed by the source change.
 - Empty and unfocused writable inputs use direct textarea pointer handlers, not
   a gesture layer. Pointerdown suppresses default focus in this state. Tap to
   focus the original textarea; hold 300 ms to start local microphone acquisition.
+- Re-evaluate a still-suspended AudioContext once after microphone permission is
+  granted. This addresses the observed iPhone path where the microphone and
+  worklet were ready but an earlier resume stayed pending without user activation.
+  There is no extra microphone request, retained idle stream or early ready state.
 - This direct-textarea comparison keeps all feedback in the existing
   microphone button: startup spinner, bounded red PCM-volume dot, then spinner
   while the result is written to the original draft, never sent. The standalone
