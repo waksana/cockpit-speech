@@ -32,7 +32,9 @@ current caret, or discard. Only this conflict recovery can add a panel.
 
 ## Hold to talk on an empty input
 
-An empty, unfocused, writable input displays a non-editing gesture layer:
+This experimental comparison variant attaches pointer handlers directly to the
+real textarea, without a wrapper or gesture layer. An empty, unfocused,
+writable input displays the placeholder:
 **轻点输入，按住说话**. A short tap focuses the real textarea for typing or
 native selection/paste. Holding for 300 ms starts microphone acquisition; wait
 for the existing microphone button to show its stop square before speaking.
@@ -48,15 +50,17 @@ The bounds exclude File, microphone and send buttons.
 
 Focused or nonempty inputs keep native editing. To paste into an empty unfocused
 input, tap first, then use native long-press paste. Keyboard Tab still focuses
-the real textarea; the gesture layer adds no tab stop. The independent microphone
+the real textarea; there is no additional tab stop. The independent microphone
 button remains the accessible alternative and retains its existing behavior.
 No host API, SDK pin or backend protocol change is required.
 
-The layer suppresses selection and touch callouts rather than intercepting a
-long press on an editable textarea. This is not a claim of iOS Safari/PWA
-hardware compatibility: microphone permission, transient activation and OS
-gesture behavior still require real-device verification. If microphone startup
-cannot complete while held, release safely and use the microphone button.
+Only in the gesture-eligible state, pointerdown prevents default focus and CSS
+suppresses selection, panning and touch callouts on the textarea. Short release
+explicitly focuses it. Original pointer/focus handlers remain chained; native
+editing is untouched when focused or nonempty. This approach competes with
+editable-element behavior and is NOT verified on iOS Safari/PWA hardware:
+magnifier, keyboard activation and permission UI need real-device comparison.
+If startup cannot complete while held, release and use the microphone button.
 
 ## File-only configuration
 

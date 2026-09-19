@@ -142,25 +142,28 @@ export const activate: ActivateFrontend = context => {
         const showGesture = holding || (!focused && props.value === '' && snapshot.text === ''
           && !props.disabled && !props.sendBlocked && speech.canStart());
         return h(React.Fragment, null,
-          h('div', { className: 'cockpit-speech-input' },
-            h(Base, { ...props, editorRef: ref,
-              onFocus: event => { setFocused(true); gesture.cancel(); props.onFocus?.(event); },
-              onBlur: event => { setFocused(false); props.onBlur?.(event); },
-            }),
-            showGesture ? h('div', {
-              className: 'cockpit-speech-hold', 'aria-hidden': true,
-              onPointerDown: event => { if (gesture.down(event, event.currentTarget)) event.preventDefault(); },
-              onPointerMove: event => {
-                for (const point of event.nativeEvent.getCoalescedEvents?.() ?? []) gesture.move(point);
-                gesture.move(event);
-              },
-              onPointerUp: event => { gesture.up(event); },
-              onPointerCancel: event => { gesture.lost(event.pointerId); },
-              onLostPointerCapture: event => { gesture.lost(event.pointerId); },
-              onContextMenu: event => event.preventDefault(),
-              onClick: event => event.preventDefault(),
-            }, '轻点输入，按住说话') : null,
-          ), button,
+          h(Base, { ...props, editorRef: ref,
+            className: [props.className, showGesture ? 'cockpit-speech-direct-hold' : ''].filter(Boolean).join(' '),
+            placeholder: showGesture ? '轻点输入，按住说话' : props.placeholder,
+            onFocus: event => { setFocused(true); gesture.cancel(); props.onFocus?.(event); },
+            onBlur: event => { setFocused(false); props.onBlur?.(event); },
+            onPointerDown: event => {
+              props.onPointerDown?.(event);
+              if (!event.defaultPrevented && showGesture && gesture.down(event, event.currentTarget)) event.preventDefault();
+            },
+            onPointerMove: event => {
+              for (const point of event.nativeEvent.getCoalescedEvents?.() ?? []) gesture.move(point);
+              gesture.move(event);
+              props.onPointerMove?.(event);
+            },
+            onPointerUp: event => { gesture.up(event); props.onPointerUp?.(event); },
+            onPointerCancel: event => { gesture.lost(event.pointerId); props.onPointerCancel?.(event); },
+            onLostPointerCapture: event => { gesture.lost(event.pointerId); props.onLostPointerCapture?.(event); },
+            onContextMenu: event => {
+              if (showGesture) event.preventDefault();
+              props.onContextMenu?.(event);
+            },
+          }), button,
         );
       },
     }, {

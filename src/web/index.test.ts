@@ -97,10 +97,7 @@ test('input middleware preserves native textarea props and keeps decision microp
         onFocus: () => { focuses++; }, onBlur: () => { blurs++; },
         'aria-label': 'Native editor', className: 'native-editor', rows: 1,
       });
-      const inputRegion = tree.children[0] as Element;
-      assert.equal(inputRegion.props.className, 'cockpit-speech-input');
-      const base = inputRegion.children[0] as Element;
-      assert.equal(inputRegion.children[1], null, 'content keeps native editing without a gesture layer');
+      const base = tree.children[0] as Element;
       assert.equal(base.type, Base);
       assert.equal(base.props.onSubmit, nativeSubmit);
       assert.equal(base.props.onChange, nativeTextChange);
@@ -113,18 +110,18 @@ test('input middleware preserves native textarea props and keeps decision microp
       (base.props.onFocus as (event: object) => void)({});
       (base.props.onBlur as (event: object) => void)({});
       assert.equal(focuses, 1); assert.equal(blurs, 1);
-      assert.equal(tree.children.length, 2, 'only input region and microphone, no recovery panel inside row');
+      assert.equal(tree.children.length, 2, 'only real input and microphone, no wrapper or gesture layer');
       const mic = tree.children[1] as Element;
       assert.equal(mic.type, 'button'); assert.equal(mic.props.type, 'button');
       assert.equal(mic.props['aria-label'], '开始语音输入');
       assert.equal(mic.props.disabled, sendBlocked);
       cleanupEffects();
       const empty = Wrapped({ draft, operation, disabled: false, sendBlocked, value: '', onSubmit: nativeSubmit, onChange: nativeTextChange });
-      const layer = (empty.children[0] as Element).children[1] as Element | null;
-      assert.equal(!!layer, !sendBlocked, 'only writable empty inputs offer a gesture');
-      if (layer) {
-        assert.equal(layer.props['aria-hidden'], true);
-        assert.equal(layer.props.tabIndex, undefined, 'keyboard focus stays on the real textarea');
+      const emptyBase = empty.children[0] as Element;
+      assert.equal(emptyBase.props.className === 'cockpit-speech-direct-hold', !sendBlocked, 'only writable empty inputs offer a gesture');
+      if (!sendBlocked) {
+        assert.equal(emptyBase.props.placeholder, '轻点输入，按住说话');
+        assert.equal(emptyBase.props.tabIndex, undefined, 'keyboard focus stays on the real textarea');
       }
       cleanupEffects();
       for (const current of ['permission', 'recording', 'stopping', 'transcribing', 'retry'] as const) {

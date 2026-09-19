@@ -1,20 +1,4 @@
-.cockpit-speech-input {
-  position: relative;
-  display: flex;
-  flex: 1 1 auto;
-  min-width: 0;
-}
-.cockpit-speech-hold {
-  position: absolute;
-  inset: 0;
-  display: flex;
-  align-items: center;
-  padding-inline: 0.5rem;
-  color: var(--ck-color-text);
-  background: var(--ck-color-surface);
-  border-radius: var(--ck-radius);
-  font-size: 0.875rem;
-  cursor: text;
+.cockpit-speech-direct-hold {
   touch-action: none;
   user-select: none;
   -webkit-user-select: none;

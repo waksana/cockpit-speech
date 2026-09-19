@@ -64,11 +64,11 @@ There is no timer, phase text, success/error panel or global error notification.
 Only draft-conflict text recovery uses the existing `composer` wrapper after the
 whole row; it cannot redirect insertion to another draft.
 
-`hold.ts` owns a single captured pointer and a 300 ms timer. The actual textarea
-stays mounted inside a module-owned flex region. Only an empty, unfocused,
-writable input gets the non-editing overlay; focus/blur chain the native handlers.
-Tab goes straight to the textarea. The overlay suppresses native touch selection,
-not the textarea's editing behavior. Bounds come from the public editor ref,
+`hold.ts` owns a single captured pointer and a 300 ms timer. This comparison
+variant attaches listeners directly to the actual textarea, with no container
+or overlay. Only empty, unfocused, writable inputs prevent pointerdown's default
+focus and apply touch/selection suppression CSS. Focus, blur and pointer handlers
+chain the native handlers; Tab goes straight to the textarea. Bounds come from the public editor ref,
 not private DOM queries. Captured/coalesced coordinates are checked on move and
 release: once outside, ownership and timer are cleared before capture release,
 then the existing speech cancellation destroys the recording. Release while
