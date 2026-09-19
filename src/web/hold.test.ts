@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { test, type TestContext } from 'node:test';
-import { HOLD_DELAY, HoldGesture } from './hold.ts';
+import { CANCEL_DISTANCE, HOLD_DELAY, HoldGesture } from './hold.ts';
 
 const point = { pointerId: 1, clientX: 20, clientY: 20, button: 0, isPrimary: true };
 function fixture(t: TestContext) {
@@ -52,9 +52,9 @@ test('long hold starts once, then release inside stops only a ready recording', 
   f.gesture.up(point);
   assert.deepEqual(f.calls, ['start', 'stop'], 'normal capture release never cancels a committed gesture');
 });
-test('leaving any edge is irreversible even when capture continues and the pointer returns', async t => {
+test('upward cancellation is irreversible even when capture continues and the pointer returns', async t => {
   for (const stage of ['waiting', 'permission', 'recording', 'retry']) {
-    for (const outside of [{ clientX: 9 }, { clientX: 110 }, { clientY: 9 }, { clientY: 50 }]) {
+    for (const outside of [{ clientY: point.clientY - CANCEL_DISTANCE }, { clientY: point.clientY - CANCEL_DISTANCE - 10 }]) {
       await t.test(`${stage} ${JSON.stringify(outside)}`, t => {
         const f = fixture(t);
         f.gesture.down(point, f.surface);
@@ -69,24 +69,23 @@ test('leaving any edge is irreversible even when capture continues and the point
     }
   }
 });
-test('release checks coordinates even when no move event was delivered', t => {
+test('release checks upward distance even when no move event was delivered', t => {
   const f = fixture(t);
   f.gesture.down(point, f.surface); t.mock.timers.tick(HOLD_DELAY);
   f.phase('recording');
-  f.gesture.up({ ...point, clientX: 200 });
+  f.gesture.up({ ...point, clientY: point.clientY - CANCEL_DISTANCE });
   assert.deepEqual(f.calls, ['start', 'cancel']);
 });
-test('unrelated scrolling preserves a hold, but moving the input away cancels it', t => {
-  const f = fixture(t);
-  f.gesture.down(point, f.surface); t.mock.timers.tick(HOLD_DELAY); f.phase('recording');
-  f.gesture.checkBounds();
-  assert.deepEqual(f.calls, ['start']);
-  f.bounds({ left: 10, top: 30, right: 110, bottom: 70 });
-  f.gesture.checkBounds();
-  assert.deepEqual(f.calls, ['start', 'cancel']);
-  f.bounds({ left: 10, top: 10, right: 110, bottom: 50 });
-  f.gesture.checkBounds(); f.gesture.up(point);
-  assert.deepEqual(f.calls, ['start', 'cancel']);
+test('sideways, downward and small upward movement allow release outside the original input', async t => {
+  for (const move of [{ clientX: -100 }, { clientX: 500 }, { clientY: 500 }, { clientY: point.clientY - CANCEL_DISTANCE + 1 }]) {
+    await t.test(JSON.stringify(move), t => {
+      const f = fixture(t);
+      f.gesture.down(point, f.surface); t.mock.timers.tick(HOLD_DELAY); f.phase('recording');
+      f.bounds({ left: 1000, top: 1000, right: 1100, bottom: 1050 });
+      f.gesture.move({ ...point, ...move }); f.gesture.up({ ...point, ...move });
+      assert.deepEqual(f.calls, ['start', 'stop']);
+    });
+  }
 });
 test('release during permission aborts rather than scheduling a later stop', t => {
   const f = fixture(t);
@@ -132,7 +131,7 @@ test('a second pointer cancels the first; unrelated releases cannot stop it', t 
   f.gesture.up(point);
   assert.deepEqual(f.calls, ['start', 'cancel']);
 });
-test('a recording failure keeps the existing retry on release, but exit destroys it', t => {
+test('a recording failure keeps the existing retry on release, but upward cancellation destroys it', t => {
   const f = fixture(t);
   f.gesture.down(point, f.surface); t.mock.timers.tick(HOLD_DELAY);
   f.phase('retry'); f.gesture.up(point);

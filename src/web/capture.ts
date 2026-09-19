@@ -1,6 +1,7 @@
 import { abortError, isRecord, MAX_SECONDS, SpeechError } from '../shared/limits.ts';
 import { abortable } from './async.ts';
 import { PCM_CHUNK, PCM_LIMIT } from './pcm.ts';
+import { pcmLevel } from './level.ts';
 
 export interface CaptureEnvironment {
   secure: boolean;
@@ -37,13 +38,15 @@ export class AudioCapture {
   private readonly fail: (error: SpeechError) => void;
   private readonly limit: () => void;
   private readonly env: CaptureEnvironment;
+  private readonly level: (value: number) => void;
   constructor(
     signal: AbortSignal,
     fail: (error: SpeechError) => void,
     limit: () => void,
     env = browserCapture(),
+    level: (value: number) => void = () => {},
   ) {
-    this.fail = fail; this.limit = limit; this.env = env;
+    this.fail = fail; this.limit = limit; this.env = env; this.level = level;
     signal.throwIfAborted();
     signal.addEventListener('abort', this.cancel, { once: true, signal: this.lifetime.signal });
     this.ready = this.start();
@@ -84,6 +87,7 @@ export class AudioCapture {
           && data.buffer.byteLength > 0 && data.buffer.byteLength <= PCM_CHUNK * 2
           && data.buffer.byteLength % 2 === 0 && this.bytes + data.buffer.byteLength <= PCM_LIMIT * 2) {
           this.chunks.push(new Uint8Array(data.buffer)); this.bytes += data.buffer.byteLength;
+          this.level(pcmLevel(data.buffer));
         } else if (isRecord(data) && data.type === 'ended' && typeof data.limited === 'boolean') {
           this.sealed = true; this.cleanup(); this.resolveStop?.();
           if (data.limited) this.limit();

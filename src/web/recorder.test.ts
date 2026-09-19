@@ -135,6 +135,20 @@ test('prompt is confirmed before audio, including explicit empty context on cach
   for (const text of ['a'.repeat(1000), '😀'.repeat(1000)]) assert.equal([...transcriptionPrompt(text)].length, 1022);
   assert.throws(() => transcriptionPrompt('a'.repeat(1001)));
 });
+test('live levels come from captured PCM without changing buffered bytes or surviving cancellation', async () => {
+  const f = fixture(); const levels: number[] = [];
+  const starting = f.prepare().start(async () => credential(), undefined, { waitForStop: true, onLevel: value => levels.push(value) });
+  f.grant(f.stream); const recording = await starting;
+  const buffer = new ArrayBuffer(4800);
+  const view = new DataView(buffer);
+  for (let i = 0; i < 2400; i++) view.setInt16(i * 2, i % 2 ? -8192 : 8192, true);
+  f.worklet.port.onmessage?.({ data: { type: 'pcm', buffer } });
+  assert.deepEqual(levels, [0.25]);
+  assert.equal(view.getInt16(0, true), 8192);
+  recording.cancel(); f.pcm();
+  assert.deepEqual(levels, [0.25]);
+  assert.equal(recording.retryable(), false);
+});
 test('held audio hitting either limit stops hardware but never commits until release, and exit discards it', async t => {
   for (const limit of ['render', 'wall'] as const) for (const action of ['release', 'exit'] as const) {
     await t.test(`${limit} limit then ${action}`, async t => {

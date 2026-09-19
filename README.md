@@ -36,22 +36,23 @@ This experimental comparison variant attaches pointer handlers directly to the
 real textarea, without a wrapper or gesture layer. An empty, unfocused,
 writable input displays the placeholder:
 **轻点输入，按住说话**. A short tap focuses the real textarea for typing or
-native selection/paste. Holding for 300 ms starts microphone acquisition; wait
-for the existing microphone button to show its stop square before speaking.
-Release inside the input to stop and transcribe into the original draft, never
-to send a message. Releasing before the microphone is ready cancels instead.
+native selection/paste. Holding for 300 ms shows a full-screen shade and startup
+spinner. Once the microphone is ready, a central circle changes size with the
+actual captured audio's volume. Release to close the shade and transcribe into
+the original draft, never send a message; the existing microphone button spins
+while waiting for the result. Release before readiness cancels instead.
 
-Moving outside the input bounds cancels immediately, including while waiting for
-the hold threshold or microphone permission. Moving back never resumes that
-press, and releasing afterward cannot submit. Cancellation discards the audio,
-not retains it for retry. Pointer capture loss/cancellation, window blur, page
-hiding and input replacement also interrupt the gesture. Scroll/resize cancels
-only if the input bounds move away from the held pointer, not for unrelated chat scrolling.
-The bounds exclude File, microphone and send buttons.
+Swipe upward 64 CSS pixels from the initial press to cancel immediately, even
+during startup. Moving back never resumes that press, and release afterward
+cannot submit. Sideways/downward movement and small upward movement do not cancel;
+the initial press still must be in the input, not File/microphone/send buttons.
+Cancellation discards audio rather than retaining it for retry. Capture loss,
+system cancellation, window blur, page hiding, resize, Escape/Tab and input
+replacement also interrupt a hold. Unrelated chat scrolling does not.
 
 At 120 seconds, a held gesture stops capture and retains its bounded audio but
-does not commit or insert anything until release inside. Moving out still
-discards it. The independent microphone button keeps its existing automatic
+does not commit or insert anything until release. Swiping up still discards it.
+The independent microphone button keeps its existing automatic
 stop-and-transcribe behavior at the same limit.
 
 Focused or nonempty inputs keep native editing. To paste into an empty unfocused

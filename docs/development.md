@@ -70,18 +70,25 @@ or overlay. Only empty, unfocused, writable inputs prevent pointerdown's default
 focus and apply touch/selection suppression CSS. Focus, blur and pointer handlers
 chain the native handlers; Tab goes straight to the textarea. Bounds come from the public editor ref,
 not private DOM queries. Captured/coalesced coordinates are checked on move and
-release: once outside, ownership and timer are cleared before capture release,
-then the existing speech cancellation destroys the recording. Release while
-starting cancels; only release during recording stops/transcribes. Unmount,
-draft/host invalidation, visibility loss and window blur cancel. Resize/scroll
-recheck the held coordinates against the current bounds; unrelated conversation
-scrolling must not interrupt a hold.
+release for a 64 CSS pixel upward swipe from the press origin. Once cancelled,
+ownership and timer clear before capture release, then existing speech
+cancellation destroys the recording. Other directions can leave the original
+input without cancelling. Release while starting cancels; only release during
+recording stops/transcribes. Unmount, draft/host invalidation, visibility loss,
+window blur, resize and Escape/Tab cancel; unrelated scrolling does not.
 The independent microphone button and post-stop retry/recovery paths are unchanged.
+
+While held in permission/recording, the public portal API mounts full-screen
+feedback under document.body without moving the input or stealing pointer capture.
+Startup shows a spinner; recording shows a circle driven by RMS of the existing
+PCM16 chunks (no second microphone or analyser). Release/cancellation removes the
+portal immediately; post-release loading uses the existing microphone button.
+The level callback is guarded by exact operation identity and reset on exit.
 
 Hold starts pass `waitForStop` to the recording preparation. At the render or wall
 limit capture stops, but the transport queue's sealed view stays false until the
-explicit inside release calls stop. Thus a capped buffer cannot auto-commit while
-still held. Exit/cancellation clears it even after capture has stopped. The
+explicit release calls stop. Thus a capped buffer cannot auto-commit while
+still held. Upward cancellation clears it even after capture has stopped. The
 microphone button's limit policy is unchanged.
 
 ## Existing validation tools
@@ -100,7 +107,7 @@ never production configuration or user recordings. They cover:
   stale callbacks, fresh retry cursors, cleanup and actual service lease release.
 - Single-button states, no notification bars, native props/ref/IME preservation,
   exact draft/revision conflicts, retained recovery and no automatic submission.
-- Tap/hold timing, all coordinate boundaries despite capture, irreversible exit,
+- Tap/hold timing, upward swipe despite capture, irreversible cancellation,
   startup release, late permission grants, capture loss and interruption cleanup.
 - Source/SDK identity, package closure and reproducibility.
 

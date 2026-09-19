@@ -1,4 +1,5 @@
 export const HOLD_DELAY = 300;
+export const CANCEL_DISTANCE = 64;
 
 export interface HoldPoint { pointerId: number; clientX: number; clientY: number }
 export interface HoldSurface {
@@ -19,7 +20,7 @@ interface Press {
   id: number;
   surface: HoldSurface;
   started: boolean;
-  point: HoldPoint;
+  startY: number;
   timer?: ReturnType<typeof setTimeout>;
 }
 
@@ -44,11 +45,11 @@ export class HoldGesture {
     if (point.button !== 0 || !point.isPrimary || !this.options.allowed() || !this.inside(point)) return false;
     surface.setPointerCapture(point.pointerId);
     const press: Press = { id: point.pointerId, surface, started: false,
-      point: { pointerId: point.pointerId, clientX: point.clientX, clientY: point.clientY } };
+      startY: point.clientY };
     this.press = press;
     press.timer = setTimeout(() => {
       if (this.press !== press) return;
-      if (!this.options.allowed() || !this.inside(press.point)) { this.cancel(); return; }
+      if (!this.options.allowed()) { this.cancel(); return; }
       press.started = true;
       this.options.start();
     }, HOLD_DELAY);
@@ -57,17 +58,15 @@ export class HoldGesture {
   }
   move(point: HoldPoint): void {
     if (this.press?.id !== point.pointerId) return;
-    this.press.point = { pointerId: point.pointerId, clientX: point.clientX, clientY: point.clientY };
-    if (!this.inside(point)) this.cancel();
+    if (point.clientY <= this.press.startY - CANCEL_DISTANCE) this.cancel();
   }
-  checkBounds = (): void => { if (this.press) this.move(this.press.point); };
   up(point: HoldPoint): void {
     const press = this.press;
     if (!press || press.id !== point.pointerId) return;
-    if (!this.inside(point)) { this.cancel(); return; }
+    if (point.clientY <= press.startY - CANCEL_DISTANCE) { this.cancel(); return; }
     this.clear(press);
     if (!press.started) {
-      if (this.options.allowed()) this.options.focus();
+      if (this.options.allowed() && this.inside(point)) this.options.focus();
     } else if (this.options.phase() === 'recording') this.options.stop();
     else if (this.options.phase() !== 'retry') this.options.cancel();
   }

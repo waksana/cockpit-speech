@@ -7,13 +7,15 @@ installation, service restart, tag or release is performed by the source change.
 - Empty and unfocused writable inputs use direct textarea pointer handlers, not
   a gesture layer. Pointerdown suppresses default focus in this state. Tap to
   focus the original textarea; hold 300 ms to start local microphone acquisition.
-- Release inside after recording starts to transcribe into the original draft,
-  without sending. Release during startup cancels; no delayed recording starts.
-- Moving outside the actual input bounds irreversibly cancels that press and
-  destroys its audio, even under pointer capture or during permission acquisition.
+- A full-screen portal shows startup loading, then a circle sized by actual PCM
+  volume. Release removes the shade; the existing microphone spins while the
+  result is written to the original draft, never sent. Startup release cancels.
+- An upward swipe of 64 CSS pixels irreversibly cancels and destroys its audio,
+  even under pointer capture or during permission acquisition. Sideways/downward
+  movement no longer cancels. This replaces the earlier all-boundaries rule.
   Capture loss, system/page interruption and input replacement also cancel.
 - At 120 seconds, stop capture but retain held audio without committing. Only
-  release inside transcribes it; exit still discards it. Independent microphone
+  release transcribes it; upward cancellation still discards it. Independent microphone
   recordings continue to stop and transcribe automatically at the limit.
 - Focused/nonempty inputs preserve editing, selection and paste. Keyboard users
   still focus the textarea directly, and the existing microphone is unchanged.
