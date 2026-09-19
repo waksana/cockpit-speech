@@ -1,3 +1,24 @@
+# Cockpit Speech 0.8.0
+
+Fixed desktop F8 push-to-talk for #20, reusing #16's original-draft hold
+submission and native ACK contract. The textarea must be empty but need not
+have focus. Other focused controls/editors, modal/popover UI, IME and
+hidden/unavailable composers are excluded; modifiers and auto-repeat do not
+start recording. There is no shortcut setting or OS-global/Fn remapping.
+
+Normal ready keyup captures one original prompt/ask/plan send intent. Startup
+release, pre-release navigation, blur, hiding, replacement, missing keyup and
+pointer/UI takeover cannot send; Escape discards. After release, navigation
+does not redirect or revoke the original intent. Keyboard completion does not
+steal focus. Existing button draft-only stop and pointer hold remain unchanged.
+
+SDK remains exactly Cockpit 0.2.6 source
+`0b8d215bbfadd640b1e0e3cad410214019336f0b`. No host API change, deployment,
+production restart or actual Windows/Lenovo hardware acceptance is included.
+Independent real-device issues #8/#9 remain open.
+
+---
+
 # Cockpit Speech 0.7.0
 
 Active hold-release submission for #16, building on #11 and the native captured
