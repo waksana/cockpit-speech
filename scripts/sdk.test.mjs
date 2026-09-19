@@ -53,7 +53,7 @@ test('source icon nodes and shipped notice match lucide-static exactly', async (
   const metadata = JSON.parse(await readFile(new URL('../node_modules/lucide-static/package.json', import.meta.url), 'utf8'));
   assert.equal(metadata.version, '1.46.0');
   const icons = await readFile(new URL('../src/web/icons.ts', import.meta.url), 'utf8');
-  for (const name of ['mic', 'square', 'rotate-ccw']) {
+  for (const name of ['mic', 'rotate-ccw']) {
     const svg = await readFile(new URL(`../node_modules/lucide-static/icons/${name}.svg`, import.meta.url), 'utf8');
     for (const [, path] of svg.matchAll(/d="([^"]+)"/g)) assert.ok(icons.includes(path));
   }

@@ -132,7 +132,7 @@ export class SpeechService {
       });
       const recording = await operation.preparation.start(this.options.session, operation.context, {
         waitForStop: mode === 'hold',
-        onLevel: value => { if (mode === 'hold' && this.current(operation) && this.state.phase === 'recording') this.update({ level: value }); },
+        onLevel: value => { if (this.current(operation) && this.state.phase === 'recording') this.update({ level: value }); },
       });
       if (!this.current(operation)) { recording.cancel(); return; }
       operation.recording = recording;

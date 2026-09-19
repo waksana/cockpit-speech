@@ -7,9 +7,11 @@ installation, service restart, tag or release is performed by the source change.
 - Empty and unfocused writable inputs use direct textarea pointer handlers, not
   a gesture layer. Pointerdown suppresses default focus in this state. Tap to
   focus the original textarea; hold 300 ms to start local microphone acquisition.
-- A full-screen portal shows startup loading, then a circle sized by actual PCM
-  volume. Release removes the shade; the existing microphone spins while the
-  result is written to the original draft, never sent. Startup release cancels.
+- This direct-textarea comparison keeps all feedback in the existing
+  microphone button: startup spinner, bounded red PCM-volume dot, then spinner
+  while the result is written to the original draft, never sent. The standalone
+  microphone's stop square is replaced with the same reactive dot. No full-screen
+  shade or separate loading indicator remains. Startup release cancels.
 - An upward swipe of 64 CSS pixels irreversibly cancels and destroys its audio,
   even under pointer capture or during permission acquisition. Sideways/downward
   movement no longer cancels. This replaces the earlier all-boundaries rule.

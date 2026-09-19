@@ -58,7 +58,7 @@ The native send remains host-owned. Prompt/ask/plan and free-text gates are
 unchanged; File remains prompt-only on the left.
 
 One circular button conveys all operational states: idle microphone, disabled
-startup spinner, recording stop square, disabled sending/transcription spinner,
+startup spinner, recording red volume dot, disabled sending/transcription spinner,
 red manual retry. Accessible names and title include the safe failure reason.
 There is no timer, phase text, success/error panel or global error notification.
 Only draft-conflict text recovery uses the existing `composer` wrapper after the
@@ -78,12 +78,13 @@ recording stops/transcribes. Unmount, draft/host invalidation, visibility loss,
 window blur, resize and Escape/Tab cancel; unrelated scrolling does not.
 The independent microphone button and post-stop retry/recovery paths are unchanged.
 
-While held in permission/recording, the public portal API mounts full-screen
-feedback under document.body without moving the input or stealing pointer capture.
-Startup shows a spinner; recording shows a circle driven by RMS of the existing
-PCM16 chunks (no second microphone or analyser). Release/cancellation removes the
-portal immediately; post-release loading uses the existing microphone button.
-The level callback is guarded by exact operation identity and reset on exit.
+Both hold and microphone-button recordings use the same fixed button for all
+feedback: startup spinner, red RMS-driven dot, then submission/transcription
+spinner. No full-screen portal, separate loading overlay or recording panel is
+mounted. The dot uses 28% of the button content size and scales only from 1 to 2,
+with clipping as a final guard; it never exceeds the button. RMS comes from the
+existing PCM16 chunks (no second microphone or analyser). The level callback is
+guarded by exact operation identity and reset on exit for either entry mode.
 
 Hold starts pass `waitForStop` to the recording preparation. At the render or wall
 limit capture stops, but the transport queue's sealed view stays false until the

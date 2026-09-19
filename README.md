@@ -12,9 +12,9 @@ The fixed circular microphone follows the actual editor and precedes native
 send, for prompt, ask and plan inputs. File stays on the left and prompt-only.
 Native free-text restrictions leave the microphone visible but disabled.
 
-**Microphone -> disabled spinner (starting microphone) -> stop square
+**Microphone -> disabled spinner (starting microphone) -> red volume dot
 (local recording) -> disabled spinner (sending/transcribing) -> microphone.**
-Wait for the square before speaking. Permission and device startup still take
+Wait for the red dot before speaking. Permission and device startup still take
 time, but credentials and networking no longer delay local recording. There is
 no timer, adjacent phase text, or success/error notification panel.
 
@@ -36,11 +36,13 @@ This experimental comparison variant attaches pointer handlers directly to the
 real textarea, without a wrapper or gesture layer. An empty, unfocused,
 writable input displays the placeholder:
 **轻点输入，按住说话**. A short tap focuses the real textarea for typing or
-native selection/paste. Holding for 300 ms shows a full-screen shade and startup
-spinner. Once the microphone is ready, a central circle changes size with the
-actual captured audio's volume. Release to close the shade and transcribe into
-the original draft, never send a message; the existing microphone button spins
-while waiting for the result. Release before readiness cancels instead.
+native selection/paste. Holding for 300 ms starts the existing microphone button's
+spinner. Once ready, a red dot inside that button changes size with actual
+captured volume, always within the fixed button bounds. Release to transcribe
+into the original draft, never send a message; the same button spins while
+waiting for the result. Release before readiness cancels instead. Clicking the
+microphone uses the identical spinner/red-dot feedback; clicking the dot stops.
+There is no full-screen shade, separate loading indicator or status panel.
 
 Swipe upward 64 CSS pixels from the initial press to cancel immediately, even
 during startup. Moving back never resumes that press, and release afterward
