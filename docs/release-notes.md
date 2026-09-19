@@ -1,3 +1,28 @@
+# Cockpit Speech 0.8.2
+
+For #27, make F8 genuinely page-wide: blank space, sidebar, buttons, other
+controls and editors may retain focus while the current visible, writable,
+empty chat target records. Document capture-phase listeners prevent ordinary
+controls' bubbling handlers from hiding F8. No forced textarea focus, caret
+movement or edits to other controls are introduced.
+
+This supersedes #20's overly narrow focus and blanket dialog/popover exclusions.
+Only actual target unavailability blocks capture, including native modal
+inertness outside the dialog; a current writable chat editor inside it remains
+eligible. DOM disabled/readonly changes interrupt an active hold as well.
+
+Empty-draft checks, readiness, repeat/modifiers/IME, late permission/key release,
+Escape, page departure, pointer/mic exclusion, original-draft captureSend/ACK and
+pre-/post-release navigation intent remain unchanged. F8 is a webpage shortcut:
+the browser address bar and other applications cannot deliver it to the page.
+
+SDK remains exactly Cockpit 0.2.6 /
+`0b8d215bbfadd640b1e0e3cad410214019336f0b`. No host contract change, deployment,
+production restart, cloud audio experiment or Windows hardware acceptance is
+included.
+
+---
+
 # Cockpit Speech 0.8.1
 
 For #25, explicitly request `server_vad.silence_duration_ms: 1000` in both

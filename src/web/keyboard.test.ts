@@ -66,12 +66,12 @@ test('startup release cancels; repeat, modifiers, IME and consumed keys never st
   assert.deepEqual(f.counts(), { starts: 1, releases: 0, interrupts: 0, cancels: 1 });
 });
 
-test('focus ownership excludes other controls, overlays, hidden, inert and offscreen editors', t => {
+test('page-wide focus permits other controls; unavailable editors and native modal exclusion still block', t => {
   const f = fixture(t);
   const allowed = () => keyboardSurfaceAvailable(f.target.editor());
   assert.equal(allowed(), true);
   f.editor.focus(); assert.equal(allowed(), true);
-  f.document.activeElement = { closest: () => ({}) }; assert.equal(allowed(), false);
+  f.document.activeElement = { closest: () => ({}) }; assert.equal(allowed(), true);
   f.document.activeElement = f.document.body;
   for (const change of ['hidden', 'detached', 'display', 'visibility', 'offscreen', 'disabled', 'readonly', 'blur', 'tab', 'modal']) {
     const restore = { ...f.editor, style: { ...f.editor.style } };
@@ -84,13 +84,25 @@ test('focus ownership excludes other controls, overlays, hidden, inert and offsc
     if (change === 'readonly') f.editor.readOnly = true;
     if (change === 'blur') f.document.focused = false;
     if (change === 'tab') f.document.visibilityState = 'hidden';
-    if (change === 'modal') f.document.overlays = [f.editor];
+    if (change === 'modal') f.document.overlays = [{ contains: () => false }];
     assert.equal(allowed(), false, change);
     f.key('keydown'); f.key('keyup');
     Object.assign(f.editor, restore);
     f.document.focused = true; f.document.visibilityState = 'visible'; f.document.overlays = [];
   }
   assert.equal(f.counts().starts, 0);
+  f.document.overlays = [f.editor];
+  assert.equal(allowed(), true, 'a current writable editor inside the native modal remains eligible');
+});
+
+test('focus moving between ordinary controls does not revoke a ready keyboard hold', t => {
+  const f = fixture(t);
+  f.document.activeElement = { closest: () => ({}) };
+  f.key('keydown'); f.phase('recording');
+  f.document.activeElement = { closest: () => ({}) };
+  f.document.dispatchEvent(new Event('focusin'));
+  f.key('keyup');
+  assert.deepEqual(f.counts(), { starts: 1, releases: 1, interrupts: 0, cancels: 0 });
 });
 
 test('unavailable, nonempty and competing capture gates do not consume F8', t => {
@@ -104,14 +116,13 @@ test('unavailable, nonempty and competing capture gates do not consume F8', t =>
 });
 
 test('interruption drains without sending and keeps a latch through missing and late keyup', async t => {
-  for (const reason of ['blur', 'pagehide', 'resize', 'hidden', 'focus', 'modal', 'pointer', 'composition', 'other-key', 'unavailable', 'external-text', 'unmount']) {
+  for (const reason of ['blur', 'pagehide', 'resize', 'hidden', 'modal', 'pointer', 'composition', 'other-key', 'unavailable', 'external-text', 'unmount']) {
     await t.test(reason, t => {
       const f = fixture(t);
       f.key('keydown'); f.phase('recording');
       if (['blur', 'pagehide', 'resize'].includes(reason)) f.window.dispatchEvent(new Event(reason));
       if (reason === 'hidden') { f.document.visibilityState = 'hidden'; f.document.dispatchEvent(new Event('visibilitychange')); }
-      if (reason === 'focus') { f.document.activeElement = { closest: () => ({}) }; f.document.dispatchEvent(new Event('focusin')); }
-      if (reason === 'modal') { f.document.overlays = [f.editor]; f.mutate(); }
+      if (reason === 'modal') { f.document.overlays = [{ contains: () => false }]; f.mutate(); }
       if (reason === 'pointer') f.document.dispatchEvent(new Event('pointerdown'));
       if (reason === 'composition') f.document.dispatchEvent(new Event('compositionstart'));
       if (reason === 'other-key') f.key('keydown', { key: 'Tab' });

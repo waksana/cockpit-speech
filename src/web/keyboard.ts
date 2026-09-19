@@ -24,16 +24,14 @@ export function keyboardSurfaceAvailable(editor: HTMLTextAreaElement): boolean {
   const document = editor.ownerDocument;
   const window = document.defaultView!;
   if (!document.hasFocus() || document.visibilityState !== 'visible' || !visible(editor)
-    || editor.disabled || editor.readOnly) return false;
+    || editor.disabled || editor.matches(':disabled') || editor.readOnly) return false;
   const rect = editor.getBoundingClientRect();
   if (rect.bottom <= 0 || rect.right <= 0 || rect.top >= window.innerHeight || rect.left >= window.innerWidth) return false;
-  for (const overlay of document.querySelectorAll('dialog[open], [role="dialog"], [role="alertdialog"], [aria-modal="true"], [popover]')) {
-    if (visible(overlay)) return false;
+  // showModal() makes the rest of the document inert without an inert attribute.
+  for (const modal of document.querySelectorAll('dialog:modal')) {
+    if (!modal.contains(editor)) return false;
   }
-  let active = document.activeElement;
-  while (active?.shadowRoot?.activeElement) active = active.shadowRoot.activeElement;
-  return !active || active === editor || active === document.body || active === document.documentElement
-    || !active.closest('input, textarea, select, button, a[href], [contenteditable]:not([contenteditable="false"]), [tabindex], [role="textbox"], [role="combobox"], [role="menu"]');
+  return true;
 }
 
 const f8 = (event: KeyboardEvent) => event.key === 'F8';
@@ -54,8 +52,8 @@ export class KeyboardHold {
       const visibility = () => { if (document.visibilityState !== 'visible') this.interrupt(); };
       const compositionStart = () => { this.composing = true; this.interrupt(); };
       const compositionEnd = () => { this.composing = false; };
-      document.addEventListener('keydown', this.down);
-      document.addEventListener('keyup', this.up);
+      document.addEventListener('keydown', this.down, true);
+      document.addEventListener('keyup', this.up, true);
       document.addEventListener('focusin', this.refresh);
       document.addEventListener('toggle', this.refresh, true);
       document.addEventListener('scroll', this.refresh, true);
@@ -69,10 +67,10 @@ export class KeyboardHold {
       const observer = document.defaultView?.MutationObserver
         ? new document.defaultView.MutationObserver(this.refresh) : undefined;
       observer?.observe(document, { subtree: true, childList: true, attributes: true,
-        attributeFilter: ['hidden', 'inert', 'aria-hidden', 'aria-modal', 'role', 'style', 'class', 'open'] });
+        attributeFilter: ['hidden', 'inert', 'aria-hidden', 'style', 'class', 'open', 'disabled', 'readonly'] });
       this.detach = () => {
-        document.removeEventListener('keydown', this.down);
-        document.removeEventListener('keyup', this.up);
+        document.removeEventListener('keydown', this.down, { capture: true });
+        document.removeEventListener('keyup', this.up, { capture: true });
         document.removeEventListener('focusin', this.refresh);
         document.removeEventListener('toggle', this.refresh, true);
         document.removeEventListener('scroll', this.refresh, true);
