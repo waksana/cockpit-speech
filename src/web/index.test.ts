@@ -41,6 +41,8 @@ test('input middleware preserves native textarea props and keeps decision microp
   let sendOutcome: SpeechSnapshot['sendOutcome'] = null;
   let recovery: SpeechSnapshot['recovery'] = null;
   let notice: string | null = null;
+  let sendRequested = false;
+  let holdingAtLimit = false;
   let holding = false;
   let focused = false;
   let level = 0;
@@ -69,7 +71,7 @@ test('input middleware preserves native textarea props and keeps decision microp
       useCallback: (fn: unknown) => fn,
       useSyncExternalStore: (_subscribe: unknown, snapshot: () => unknown) => {
         const value = snapshot();
-        return value && typeof value === 'object' && 'phase' in value ? { ...value, phase, error, notice, level, sendOutcome, recovery }
+        return value && typeof value === 'object' && 'phase' in value ? { ...value, phase, error, notice, level, sendOutcome, recovery, sendRequested, holdingAtLimit }
           : typeof value === 'boolean' ? holding : value;
       },
       useLayoutEffect: (effect: () => void | (() => void)) => { const cleanup = effect(); if (cleanup) effects.push(cleanup); },
@@ -144,6 +146,8 @@ test('input middleware preserves native textarea props and keeps decision microp
       assert.equal(((empty.children[0] as Element).children[0] as Element).props.placeholder,
         layer ? '' : 'Native placeholder', 'hide the native hint only while the transparent gesture layer supplies it');
       if (layer) {
+        assert.equal(layer.children[0], '轻点输入，按住说话');
+        assert.equal((layer.children[1] as Element).children[0], '(F8)');
         assert.equal(layer.props['aria-hidden'], true);
         assert.equal(layer.props.tabIndex, undefined, 'keyboard focus stays on the real textarea');
         let nativeFocus = 0;
@@ -198,6 +202,10 @@ test('input middleware preserves native textarea props and keeps decision microp
         assert.equal(button.props['aria-busy'], busy);
         assert.equal(button.props['aria-pressed'], current === 'recording');
         assert.notEqual(button.props['aria-label'], '取消语音输入');
+        if (current === 'sending') {
+          assert.equal(button.props['aria-label'], '正在发送');
+          assert.equal(button.props.title, '正在发送');
+        }
         const icon = button.children[0] as Element;
         assert.equal(icon.type === 'span', busy);
         if (busy) {
@@ -218,6 +226,13 @@ test('input middleware preserves native textarea props and keeps decision microp
             cleanupEffects();
           }
           level = 0;
+          holdingAtLimit = true;
+          const capped = Wrapped({ draft, operation, disabled: false, sendBlocked: false, value: '', onSubmit: nativeSubmit, onChange: nativeTextChange });
+          const cappedButton = capped.children[1] as Element;
+          assert.equal(cappedButton.props['aria-label'], '录音已达两分钟');
+          assert.equal(cappedButton.props.title, '录音已达两分钟');
+          cleanupEffects();
+          holdingAtLimit = false;
         }
         holding = false;
         cleanupEffects();
@@ -268,6 +283,37 @@ test('input middleware preserves native textarea props and keeps decision microp
         assert.equal(service.getSnapshot().phase, 'idle');
       }
     }
+    error = null;
+    for (const requested of [false, true]) {
+      sendRequested = requested;
+      for (const current of ['permission', 'recording', 'stopping', 'transcribing', 'sending'] as const) {
+        phase = current;
+        const label = Status()!.children[1] as Element;
+        const expected = current === 'permission' ? '正在准备录音…' : current === 'recording' ? '正在录音' : '正在处理录音…';
+        assert.equal(label.children[0], expected);
+        assert.equal(label.props.title, expected);
+        assert.equal(label.props.role, 'status');
+      }
+      phase = 'recording'; holdingAtLimit = true;
+      const capped = Status()!;
+      assert.equal((capped.children[1] as Element).children[0], '已达两分钟');
+      assert.equal(((capped.children[0] as Element).children[0] as Element).props.name, 'pause');
+      holdingAtLimit = false;
+      phase = 'retry'; error = '转写失败。';
+      const retained = t.mock.method(service, 'hasRetainedRecording', () => true);
+      const retryable = t.mock.method(service, 'canRetry', () => true);
+      assert.equal((Status()!.children[1] as Element).children[0], '转写失败。录音已保留，点击话筒重试。');
+      retryable.mock.mockImplementation(() => false);
+      assert.equal((Status()!.children[1] as Element).children[0], '转写失败。录音已保留，当前无法重试，可清除后重新录音。');
+      retained.mock.mockImplementation(() => false);
+      assert.equal((Status()!.children[1] as Element).children[0], '转写失败。请点击话筒重新录音。');
+      retained.mock.restore(); retryable.mock.restore();
+      error = null;
+    }
+    sendRequested = false;
+    phase = 'send-error'; sendOutcome = 'blocked';
+    error = '自动发送未执行。录音和文字已保留，请确认原草稿后使用原发送按钮。';
+    assert.equal((Status()!.children[1] as Element).children[0], error);
     phase = 'send-error'; sendOutcome = 'unconfirmed';
     recovery = { id: 'prompt', sessionId: 's', purpose: 'prompt', text: 'synthetic message' };
     error = '发送结果未确认，可能已提交；不会自动重发。';

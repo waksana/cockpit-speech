@@ -33,6 +33,10 @@
   overflow: hidden;
 }
 .cockpit-speech-mic.cockpit-speech-retry { color: var(--ck-color-danger); }
+.cockpit-speech-key-hint { margin-inline-start: 0.25em; }
+@media (pointer: coarse) {
+  .cockpit-speech-key-hint { display: none; }
+}
 .cockpit-speech-editor { flex: none; min-width: 0; }
 .cockpit-speech-stop.ck-icon { fill: currentColor; color: var(--ck-color-danger); }
 .cockpit-speech-level {

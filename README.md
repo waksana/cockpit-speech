@@ -45,7 +45,7 @@ current caret, or discard. Only this conflict recovery adds a result panel.
 ## Hold to talk on an empty input
 
 An empty, unfocused, writable input displays a non-editing gesture layer:
-**轻点输入，按住说话，松手发送**. A short tap focuses the real textarea for typing or
+**轻点输入，按住说话**. A short tap focuses the real textarea for typing or
 native selection/paste. Before the 300 ms hold threshold, pressing does not
 show or announce recording status, change the layout or acquire the microphone.
 Preparation feedback starts only when microphone startup begins. Once ready, the status
