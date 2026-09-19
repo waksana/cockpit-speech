@@ -25,6 +25,8 @@ export function keyboardDOM() {
       rect: { left: 0, right: 200, top: 0, bottom: 80 },
       selectionStart: 0, selectionEnd: 0,
       closest: () => node.hidden ? node : null,
+      matches: () => node.disabled,
+      contains: (element: unknown) => element === node,
       getBoundingClientRect: () => node.rect,
       getClientRects: () => node.style.display === 'none' ? [] : [node.rect],
       focus() { document.activeElement = node; document.dispatchEvent(new Event('focusin')); },

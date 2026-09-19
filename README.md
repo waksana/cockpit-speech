@@ -105,7 +105,7 @@ Focused or nonempty inputs keep native editing. To paste into an empty unfocused
 input, tap first, then use native long-press paste. Keyboard Tab still focuses
 the real textarea; the gesture layer adds no tab stop. The independent microphone
 button remains the accessible alternative and retains its existing behavior.
-Speech 0.8.1 requires the paired host's `draftLifecycleVersion: 1` and
+Speech 0.8.2 requires the paired host's `draftLifecycleVersion: 1` and
 `draftSubmissionVersion: 1` capabilities
 as well as Cockpit's additive public UI classes. It uses the
 existing `composerEditor` middleware for the full-width status row and leaves
@@ -127,18 +127,23 @@ authorization and deliberately releases the microphone after stop/cancel.
 With the Cockpit page focused and its current writable textarea **empty**, hold
 the fixed, unmodified **F8** key to start immediately; wait for the recording red
 dot, speak, then release F8 to transcribe and send once. **The textarea need not
-have focus.** Both its controlled value and original draft must be empty (spaces
+have focus.** Page blank space, sidebar, buttons and other focused controls
+all support F8 without changing their text or moving focus. Both its controlled
+value and original draft must be empty (spaces
 count as text). Existing attachments are allowed and keep the normal #16 send
 guards. Nonempty drafts keep native editing; use the microphone button for
 selection-based dictation without automatic sending.
 
-F8 does not take over another focused form/control/editor, an open dialog or
-popover, IME composition, or a hidden, inert, offscreen or unavailable composer.
+F8 is gated by the chat target, not by the focused control or the mere presence
+of a dialog/popover. Hidden, inert, offscreen, disabled, readonly or unavailable
+composers and IME composition remain excluded. A native modal dialog makes a
+chat editor outside it unavailable; a current writable editor inside it can
+still receive F8.
 If more than one eligible composer is visible, it does not guess a target.
 It does not focus the textarea or move its caret, including when interrupted
 transcription later completes. Auto-repeat cannot start another recording.
 Escape explicitly discards the take; pressing another key, clicking/touching,
-focus moving to another control, window blur, hiding, resize, input replacement
+window blur, hiding, resize, input replacement
 or unmount ends capture without authorizing a send. Starting microphone
 permission and releasing before actual readiness also cannot send; late media
 grants are closed.
@@ -159,6 +164,8 @@ missing keyup is never converted into automatic send.
 
 This is a **webpage shortcut, not an OS-global hotkey**. Browsers, extensions,
 developer tools or the OS may consume F8; the webpage cannot override that.
+The browser address bar and other applications do not deliver keyboard events
+to the page, so F8 cannot start recording there.
 Lenovo/other keyboards may require Fn+F8 or a firmware Fn-lock setting to emit
 F8; the module cannot control Fn mapping. There is no shortcut settings page.
 Synthetic keyboard/media coverage is not Windows/Lenovo hardware acceptance;

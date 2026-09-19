@@ -177,16 +177,21 @@ Before the hold threshold, no recording status row or live announcement is
 mounted and no audio starts. Preparation feedback follows the actual `permission`
 phase. Short-tap focus still uses the completed click.
 
-`keyboard.ts` provides one activation-scoped listener set and physical F8 latch
-across composer registration/replacement. It checks the public editor ref,
-standard DOM visibility/focus and dialog semantics, plus live host/draft gates;
-it never queries host-private selectors. An empty textarea need not be focused.
+`keyboard.ts` provides one activation-scoped capture-phase listener set and
+physical F8 latch across composer registration/replacement. Capture phase keeps
+ordinary controls' bubbling handlers from hiding keydown/keyup. It checks the
+public editor ref, document focus, target visibility/writability and native modal
+inertness, plus live host/draft gates; it never queries host-private selectors.
+Focus on body, a sidebar, button, link, another editor or other control is not a
+veto. Neither is a nonmodal dialog/popover or an ARIA role alone: the chat target
+must actually become unavailable. An empty textarea need not be focused.
 Ambiguous visible composers fail closed. Keyboard starts use the existing hold
 mode with completion autofocus disabled, so an interrupted background result
 cannot steal focus from another UI. Only ready, unmodified keyup calls the same
 `releaseHold`; it clears key ownership first. Pre-release interruption, Escape,
 composition, pointer activity and lost-keyup recovery cannot capture consent.
-One MutationObserver handles UI visibility/dialog takeover without a timer or
+One MutationObserver handles UI visibility, native modal takeover and DOM
+disabled/readonly changes (including disabled fieldsets) without a timer or
 poll loop. Listeners persist through a composer gap to consume late release,
 and the module abort signal removes them. Pointer and button behavior remains
 separate while sharing the service's single capture owner.
@@ -239,7 +244,7 @@ never production configuration or user recordings. They cover:
 - Tap/hold timing, upward swipe despite capture, irreversible cancellation,
   startup release, late permission grants, capture loss and interruption cleanup.
 - F8 startup/readiness/release, modifiers/repeat/IME, empty input without focus,
-  other-control/modal/visibility exclusion, missing/late keyup, composer rebinding,
+  other-control focus, target unavailability/native modal inertness, missing/late keyup, composer rebinding,
   teardown and button/pointer contention; original prompt/ask/plan ACK and guards.
 - Source/SDK identity, package closure and reproducibility.
 
@@ -259,6 +264,41 @@ COCKPIT_TEST_SPEECH_ENTRY=/absolute/cockpit-speech/dist/web/index.js \
 Use the host's existing Chat Lab for browser interaction, with synthetic
 microphone/credential/socket fixtures. Do not build a parallel demo app or
 connect the Lab to native sessions. Lab CSP intentionally excludes Azure.
+
+### Page-wide F8 browser regression (#27)
+
+`scripts/browser/f8.browser.mjs` runs Node's existing test runner with an already
+installed Puppeteer driver/Chromium, the **compiled** `dist/web/index.js`, and the
+exact pinned host's existing Chat Lab (no host edits). The fixture injects only
+synthetic media, credentials, transcript results and native ACK responses into
+the real host module runtime. Keyboard input uses browser automation's actual
+keydown/keyup path, not direct handler calls. Browser requests are loopback-only
+and the Lab CSP excludes cloud sockets.
+
+After `pnpm build`, start the Lab and run the browser suite:
+
+```sh
+node scripts/browser/serve-chat-lab.mjs /absolute/pinned-host-source
+PUPPETEER_MODULE=/absolute/installed/puppeteer-entry.js \
+  CHROME_BIN=/absolute/chrome \
+  node --test scripts/browser/f8.browser.mjs
+```
+
+The driver may also be the existing Chrome DevTools MCP `third_party/index.js`
+bundle (its `puppeteer` export). No test dependency is added to the shipping
+module. On isolated Linux runners without a usable Chromium sandbox,
+`CHROME_NO_SANDBOX=1` is an explicit local-fixture-only opt-in; it does not change
+the host or production browser configuration. The default retains the sandbox.
+
+Coverage includes first open/body before any textarea click, clicked transcript,
+sidebar/button/link/select/checkbox/other editor focus, unchanged focus/selection,
+stopped event bubbling, textarea focus, nonempty drafts, native/nonmodal dialogs,
+popover, unavailable targets, late permission, repeat/modifiers/IME/Escape,
+actual window departure, session switches before/after release, and teardown.
+The baseline 0.8.1 compiled module started on body/textarea but refused buttons
+and selects; the focusable transcript also matched its excluded `[tabindex]`
+selector. That old synthetic body-only success did not establish page-wide F8.
+This is Chromium/Linux synthetic-media coverage, not Windows hardware acceptance.
 
 Synthetic success is not evidence of physical microphones, all browsers,
 provider availability, recognition quality or billing. Real cloud smoke needs
