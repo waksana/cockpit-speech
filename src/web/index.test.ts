@@ -38,6 +38,7 @@ test('input middleware preserves native textarea props and keeps decision microp
   let phase: SpeechSnapshot['phase'] = 'idle';
   let error: string | null = null;
   let holding = false;
+  let focused = false;
   let level = 0;
   for (const key of ['window', 'document']) {
     const original = Object.getOwnPropertyDescriptor(globalThis, key);
@@ -54,7 +55,7 @@ test('input middleware preserves native textarea props and keeps decision microp
       Fragment: 'fragment',
       createElement: (type: unknown, props: Record<string, unknown> | null, ...children: unknown[]): Element => ({ type, props: props ?? {}, children }),
       useRef: (value: unknown) => ({ current: value }),
-      useState: (value: unknown) => [value, () => {}],
+      useState: () => [focused, () => {}],
       useMemo: (factory: () => unknown) => factory(),
       useCallback: (fn: unknown) => fn,
       useSyncExternalStore: (_subscribe: unknown, snapshot: () => unknown) =>
@@ -120,13 +121,57 @@ test('input middleware preserves native textarea props and keeps decision microp
       assert.equal(mic.props['aria-label'], '开始语音输入');
       assert.equal(mic.props.disabled, sendBlocked);
       cleanupEffects();
-      const empty = Wrapped({ draft, operation, disabled: false, sendBlocked, value: '', onSubmit: nativeSubmit, onChange: nativeTextChange });
+      let blockDown = false, blockClick = false, clicks = 0, downs = 0;
+      const empty = Wrapped({ draft, operation, disabled: false, sendBlocked, value: '', onSubmit: nativeSubmit, onChange: nativeTextChange,
+        onPointerDown: event => { downs++; if (blockDown) event.preventDefault(); },
+        onClick: event => { clicks++; if (blockClick) event.preventDefault(); },
+      });
       const emptyBase = empty.children[0] as Element;
       assert.equal(emptyBase.props.className === 'cockpit-speech-direct-hold', !sendBlocked, 'only writable empty inputs offer a gesture');
       if (!sendBlocked) {
         assert.equal(emptyBase.props.placeholder, '轻点输入，按住说话');
         assert.equal(emptyBase.props.tabIndex, undefined, 'keyboard focus stays on the real textarea');
+        let nativeFocus = 0;
+        const editor = { ownerDocument: { activeElement: null },
+          getBoundingClientRect: () => ({ left: 0, right: 100, top: 0, bottom: 50 }),
+          focus: () => { nativeFocus++; } };
+        (emptyBase.props.editorRef as (node: typeof editor) => void)(editor);
+        let captured = false;
+        const makeEvent = () => ({ pointerId: 1, clientX: 20, clientY: 20, button: 0, isPrimary: true,
+          currentTarget: { setPointerCapture: () => { captured = true; }, hasPointerCapture: () => captured,
+            releasePointerCapture: () => { captured = false; } },
+          defaultPrevented: false, preventDefault() { this.defaultPrevented = true; } });
+        const invoke = (name: string, event = makeEvent()) => {
+          (emptyBase.props[name] as (value: typeof event) => void)(event);
+          return event;
+        };
+        assert.equal(invoke('onPointerDown').defaultPrevented, true);
+        invoke('onPointerUp');
+        assert.equal(nativeFocus, 0, 'focus waits for a completed click');
+        assert.equal(invoke('onClick').defaultPrevented, true);
+        assert.equal(nativeFocus, 1, 'the completed click focuses the original editor synchronously');
+        assert.equal(invoke('onClick').defaultPrevented, false, 'unowned clicks keep their native default');
+        assert.equal(nativeFocus, 1, 'the tap is consumed exactly once');
+        assert.equal(downs, 1); assert.equal(clicks, 2, 'original callbacks are forwarded');
+        blockDown = true;
+        invoke('onPointerDown'); invoke('onPointerUp'); invoke('onClick');
+        assert.equal(nativeFocus, 1, 'a native down handler can decline interception');
+        blockDown = false; blockClick = true;
+        invoke('onPointerDown'); invoke('onPointerUp'); invoke('onClick');
+        assert.equal(nativeFocus, 1, 'a native click handler can decline focus');
+        blockClick = false;
+        invoke('onPointerDown'); invoke('onPointerCancel');
+        assert.equal(invoke('onClick').defaultPrevented, true, 'cancelled owned clicks cannot trigger native focus');
+        assert.equal(nativeFocus, 1);
       }
+      cleanupEffects();
+      focused = true;
+      const editing = Wrapped({ draft, operation, disabled: false, sendBlocked: false, value: '', placeholder: 'Native placeholder',
+        onSubmit: nativeSubmit, onChange: nativeTextChange });
+      const editingBase = editing.children[0] as Element;
+      assert.equal(editingBase.props.className, '');
+      assert.equal(editingBase.props.placeholder, 'Native placeholder');
+      focused = false;
       cleanupEffects();
       for (const current of ['permission', 'recording', 'stopping', 'transcribing', 'retry'] as const) {
         phase = current;

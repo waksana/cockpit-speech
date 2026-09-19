@@ -35,10 +35,35 @@ test('short tap focuses the real editor without acquiring a microphone', t => {
   assert.equal(f.gesture.down(point, f.surface), true);
   t.mock.timers.tick(HOLD_DELAY - 1);
   f.gesture.up(point);
+  assert.deepEqual(f.calls, [], 'release must not remove the touch target before touchend/click');
+  f.gesture.click();
+  f.gesture.click();
   t.mock.timers.tick(1000);
   assert.deepEqual(f.calls, ['focus']);
   assert.equal(f.captured(), undefined);
   assert.equal(f.gesture.getSnapshot(), false);
+});
+test('only a completed, still-eligible short tap can focus from click', async t => {
+  for (const kind of ['no-press', 'cancelled', 'interrupted-after-release', 'blocked-after-release', 'outside', 'held', 'new-press']) {
+    await t.test(kind, t => {
+      const f = fixture(t);
+      if (kind !== 'no-press') {
+        f.gesture.down(point, f.surface);
+        if (kind === 'held') t.mock.timers.tick(HOLD_DELAY);
+        if (kind === 'cancelled') f.gesture.cancel();
+        f.gesture.up(kind === 'outside' ? { ...point, clientX: 500 } : point);
+        if (kind === 'interrupted-after-release') f.gesture.cancel();
+        if (kind === 'blocked-after-release') f.allowed(false);
+        if (kind === 'new-press') f.gesture.down({ ...point, pointerId: 2 }, f.surface);
+      }
+      f.gesture.click();
+      assert.equal(f.calls.includes('focus'), false);
+      f.gesture.cancel();
+      f.allowed(true);
+      f.gesture.click();
+      assert.equal(f.calls.includes('focus'), false, 'a discarded click cannot become eligible later');
+    });
+  }
 });
 test('long hold starts once, then release inside stops only a ready recording', t => {
   const f = fixture(t);

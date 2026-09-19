@@ -11,6 +11,9 @@ installation, service restart, tag or release is performed by the source change.
   granted. This addresses the observed iPhone path where the microphone and
   worklet were ready but an earlier resume stayed pending without user activation.
   There is no extra microphone request, retained idle stream or early ready state.
+- Focus the original textarea synchronously from a completed short click, not
+  pointerup. Cancelled or held presses cannot focus from their trailing click.
+  Physical iPhone keyboard behavior still requires confirmation.
 - This direct-textarea comparison keeps all feedback in the existing
   microphone button: startup spinner, bounded red PCM-volume dot, then spinner
   while the result is written to the original draft, never sent. The standalone

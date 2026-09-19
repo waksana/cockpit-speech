@@ -66,6 +66,7 @@ export const activate: ActivateFrontend = context => {
       wrap: Base => function SpeechInput(props: ComposerInputProps) {
         const draft = context.state.bindDraft(props.draft);
         const input = React.useRef<HTMLTextAreaElement | null>(null);
+        const interceptedClick = React.useRef(false);
         const [focused, setFocused] = React.useState(false);
         const latest = React.useRef(props);
         latest.current = props;
@@ -155,8 +156,12 @@ export const activate: ActivateFrontend = context => {
             onFocus: event => { setFocused(true); gesture.cancel(); props.onFocus?.(event); },
             onBlur: event => { setFocused(false); props.onBlur?.(event); },
             onPointerDown: event => {
+              if (event.isPrimary) interceptedClick.current = false;
               props.onPointerDown?.(event);
-              if (!event.defaultPrevented && showGesture && gesture.down(event, event.currentTarget)) event.preventDefault();
+              if (!event.defaultPrevented && showGesture && gesture.down(event, event.currentTarget)) {
+                interceptedClick.current = true;
+                event.preventDefault();
+              }
             },
             onPointerMove: event => {
               for (const point of event.nativeEvent.getCoalescedEvents?.() ?? []) gesture.move(point);
@@ -169,6 +174,16 @@ export const activate: ActivateFrontend = context => {
             onContextMenu: event => {
               if (showGesture) event.preventDefault();
               props.onContextMenu?.(event);
+            },
+            onClick: event => {
+              props.onClick?.(event);
+              if (interceptedClick.current) {
+                interceptedClick.current = false;
+                const blocked = event.defaultPrevented;
+                event.preventDefault();
+                if (blocked) gesture.cancel();
+                else gesture.click();
+              }
             },
           }), button,
         );

@@ -26,6 +26,7 @@ interface Press {
 
 export class HoldGesture {
   private press: Press | null = null;
+  private pendingTap = false;
   private readonly options: HoldOptions;
   private readonly listeners = new Set<() => void>();
   constructor(options: HoldOptions) { this.options = options; }
@@ -41,6 +42,7 @@ export class HoldGesture {
       && point.clientY >= bounds.top && point.clientY < bounds.bottom;
   }
   down(point: HoldPoint & { button: number; isPrimary: boolean }, surface: HoldSurface): boolean {
+    this.pendingTap = false;
     if (this.press) { this.cancel(); return false; }
     if (point.button !== 0 || !point.isPrimary || !this.options.allowed() || !this.inside(point)) return false;
     surface.setPointerCapture(point.pointerId);
@@ -66,12 +68,18 @@ export class HoldGesture {
     if (point.clientY <= press.startY - CANCEL_DISTANCE) { this.cancel(); return; }
     this.clear(press);
     if (!press.started) {
-      if (this.options.allowed() && this.inside(point)) this.options.focus();
+      this.pendingTap = this.options.allowed() && this.inside(point);
     } else if (this.options.phase() === 'recording') this.options.stop();
     else if (this.options.phase() !== 'retry') this.options.cancel();
   }
+  click(): void {
+    const tap = this.pendingTap;
+    this.pendingTap = false;
+    if (tap && this.options.allowed()) this.options.focus();
+  }
   lost(id: number): void { if (this.press?.id === id) this.cancel(); }
   cancel = (): void => {
+    this.pendingTap = false;
     const press = this.press;
     if (!press) return;
     this.clear(press);

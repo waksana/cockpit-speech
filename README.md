@@ -64,8 +64,8 @@ button remains the accessible alternative and retains its existing behavior.
 No host API, SDK pin or backend protocol change is required.
 
 Only in the gesture-eligible state, pointerdown prevents default focus and CSS
-suppresses selection, panning and touch callouts on the textarea. Short release
-explicitly focuses it. Original pointer/focus handlers remain chained; native
+suppresses selection, panning and touch callouts on the textarea. A completed
+short click explicitly focuses it. Original pointer/focus/click handlers remain chained; native
 editing is untouched when focused or nonempty. This approach competes with
 editable-element behavior and is NOT verified on iOS Safari/PWA hardware:
 magnifier, keyboard activation and permission UI need real-device comparison.
