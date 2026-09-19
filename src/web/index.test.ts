@@ -23,9 +23,9 @@ test('editor refs preserve object refs, callback nulls and React 19 cleanup', ()
   assert.equal(cleaned, 1); assert.equal(local.current, null);
 });
 test('frontend requires additive capabilities rather than assuming them from API v2', () => {
-  for (const patch of [{ chatWindowVersion: undefined }, { composerInputVersion: undefined }, { draftLifecycleVersion: undefined }]) {
+  for (const patch of [{ chatWindowVersion: undefined }, { composerInputVersion: undefined }, { draftLifecycleVersion: undefined }, { draftSubmissionVersion: undefined }]) {
     assert.throws(() => activate({
-      apiVersion: 2, uiVersion: 1, chatWindowVersion: 1, composerInputVersion: 1, draftLifecycleVersion: 1,
+      apiVersion: 2, uiVersion: 1, chatWindowVersion: 1, composerInputVersion: 1, draftLifecycleVersion: 1, draftSubmissionVersion: 1,
       state: { chatWindow: {}, bindDraft() {} }, ...patch,
     } as unknown as ModuleFrontendContext), /配套宿主/);
   }
@@ -38,6 +38,8 @@ test('input middleware preserves native textarea props and keeps decision microp
   let service!: SpeechService;
   let phase: SpeechSnapshot['phase'] = 'idle';
   let error: string | null = null;
+  let sendOutcome: SpeechSnapshot['sendOutcome'] = null;
+  let recovery: SpeechSnapshot['recovery'] = null;
   let notice: string | null = null;
   let holding = false;
   let focused = false;
@@ -51,7 +53,7 @@ test('input middleware preserves native textarea props and keeps decision microp
   const cleanupEffects = () => { for (const cleanup of effects.splice(0).reverse()) cleanup(); };
   const host = { getSnapshot: () => ({ sessionId: 's', visible: true, connected: true }), subscribe: () => () => {} };
   const context = {
-    apiVersion: 2, uiVersion: 1, chatWindowVersion: 1, composerInputVersion: 1, draftLifecycleVersion: 1,
+    apiVersion: 2, uiVersion: 1, chatWindowVersion: 1, composerInputVersion: 1, draftLifecycleVersion: 1, draftSubmissionVersion: 1,
     signal: new AbortController().signal, request: async () => { throw new Error('No HTTP from render'); }, report() {},
     createPortal: () => assert.fail('recording feedback must stay in normal component flow'),
     react: {
@@ -67,7 +69,7 @@ test('input middleware preserves native textarea props and keeps decision microp
       useCallback: (fn: unknown) => fn,
       useSyncExternalStore: (_subscribe: unknown, snapshot: () => unknown) => {
         const value = snapshot();
-        return value && typeof value === 'object' && 'phase' in value ? { ...value, phase, error, notice, level }
+        return value && typeof value === 'object' && 'phase' in value ? { ...value, phase, error, notice, level, sendOutcome, recovery }
           : typeof value === 'boolean' ? holding : value;
       },
       useLayoutEffect: (effect: () => void | (() => void)) => { const cleanup = effect(); if (cleanup) effects.push(cleanup); },
@@ -85,6 +87,7 @@ test('input middleware preserves native textarea props and keeps decision microp
   } as unknown as ModuleFrontendContext;
   const frontend = await activate(context);
   assert.deepEqual(frontend.writes, ['text']);
+  assert.deepEqual(frontend.sends, ['draft']);
   assert.equal(frontend.menus, undefined);
   const component = frontend.components![0]!;
   assert.equal(component.boundary, 'composerInput');
@@ -99,6 +102,7 @@ test('input middleware preserves native textarea props and keeps decision microp
         id: operation, sessionId: 's', purpose: operation === 'prompt' ? { kind: operation } : { kind: operation, requestId: 'request' },
         getSnapshot: () => ({ text: '', revision: 0, pending: false, unconfirmed: false, hasContent: false, blocks: [], retired: false }),
         subscribe: () => () => {}, editText() {}, editTextIfRevision: () => true, block: () => () => {},
+        captureSend: () => { throw new Error('No send intent from rendering'); },
       } as ModuleDraft;
       const sendBlocked = operation === 'ask' || operation === 'elicitation';
       const onPaste = () => {};
@@ -184,13 +188,13 @@ test('input middleware preserves native textarea props and keeps decision microp
       assert.equal(cancellations, before + 1, 'external changes interrupt a hold without discarding its audio');
       cleanupEffects(); ownership.mock.restore(); onGesture = undefined;
       holding = false; phase = 'idle';
-      for (const current of ['permission', 'recording', 'stopping', 'transcribing', 'retry'] as const) {
+      for (const current of ['permission', 'recording', 'stopping', 'transcribing', 'retry', 'sending', 'send-error'] as const) {
         phase = current;
         holding = true;
         const rendered = Wrapped({ draft, operation, disabled: false, sendBlocked: false, value: '', onSubmit: nativeSubmit, onChange: nativeTextChange });
         const button = rendered.children[1] as Element;
-        const busy = current !== 'recording' && current !== 'retry';
-        assert.equal(button.props.disabled, busy || current === 'retry');
+        const busy = current !== 'recording' && current !== 'retry' && current !== 'send-error';
+        assert.equal(button.props.disabled, busy || current === 'retry' || current === 'send-error');
         assert.equal(button.props['aria-busy'], busy);
         assert.equal(button.props['aria-pressed'], current === 'recording');
         assert.notEqual(button.props['aria-label'], '取消语音输入');
@@ -231,7 +235,7 @@ test('input middleware preserves native textarea props and keeps decision microp
     assert.equal(typeof (tree.children[1] as Element).type, 'function', 'feedback follows the whole composer');
     const PanelComponent = (tree.children[1] as Element).type as (props: { id: string }) => Element | null;
     const Panel = () => PanelComponent({ id: 'prompt' });
-    for (const current of ['permission', 'recording', 'stopping', 'transcribing', 'retry'] as const) {
+    for (const current of ['permission', 'recording', 'stopping', 'transcribing', 'retry', 'sending', 'send-error'] as const) {
       phase = current;
       assert.equal(Panel(), null, 'no phase text, timer or cancel panel');
     }
@@ -247,13 +251,13 @@ test('input middleware preserves native textarea props and keeps decision microp
     const StatusComponent = (statusTree.children[0] as Element).type as (props: { id: string }) => Element | null;
     const Status = () => StatusComponent({ id: 'prompt' });
     assert.equal(Status(), null);
-    for (const current of ['permission', 'recording', 'stopping', 'transcribing', 'retry'] as const) {
+    for (const current of ['permission', 'recording', 'stopping', 'transcribing', 'retry', 'sending', 'send-error'] as const) {
       phase = current;
       const row = Status()!;
       assert.match(String(row.props.className), /ck-input-status ck-status-text/);
       const marker = row.children[0] as Element;
       const symbol = marker.children[0] as Element;
-      const pending = ['permission', 'stopping', 'transcribing'].includes(current);
+      const pending = ['permission', 'stopping', 'transcribing', 'sending'].includes(current);
       assert.equal(symbol.props.className, pending ? 'cockpit-speech-spinner cockpit-speech-status-spinner'
         : current === 'recording' ? 'cockpit-speech-level' : 'cockpit-speech-status-icon');
       assert.equal(!!row.children[2], current === 'recording', 'time is only shown during recording');
@@ -264,6 +268,16 @@ test('input middleware preserves native textarea props and keeps decision microp
         assert.equal(service.getSnapshot().phase, 'idle');
       }
     }
+    phase = 'send-error'; sendOutcome = 'unconfirmed';
+    recovery = { id: 'prompt', sessionId: 's', purpose: 'prompt', text: 'synthetic message' };
+    error = '发送结果未确认，可能已提交；不会自动重发。';
+    const unknown = Panel()!;
+    const recovered = unknown.children[0] as Element;
+    assert.equal((recovered.children[1] as Element).children[0], '识别结果（发送状态未确认）');
+    const statusRow = Status()!;
+    assert.equal((statusRow.children[1] as Element).children[0], error);
+    assert.match(String((statusRow.children[3] as Element).props.title), /不会撤回/);
+    sendOutcome = null; recovery = null;
     notice = '当前问题参考不可用，将仅根据录音转写。';
     for (const current of ['permission', 'recording', 'stopping', 'transcribing'] as const) {
       phase = current;

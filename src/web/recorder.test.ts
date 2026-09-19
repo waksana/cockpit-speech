@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import type { DraftAskContext, DraftPurpose, ModuleDraft } from '@cockpit/module-api';
+import type { DraftAskContext, DraftPurpose, DraftSendResult, ModuleDraft } from '@cockpit/module-api';
 import { prepareRecording } from './recorder.ts';
 import type { AudioEnvironment } from './recorder.ts';
 import { SpeechService } from './speech.ts';
@@ -84,7 +84,7 @@ function fixture() {
     values: () => ({ stops, closes, captures }) };
 }
 function serviceFixture(f: ReturnType<typeof fixture>, writable = false,
-  options: { purpose?: DraftPurpose; askContext?: DraftAskContext } = {}) {
+  options: { purpose?: DraftPurpose; askContext?: DraftAskContext; submit?: (revision: number) => Promise<DraftSendResult> } = {}) {
   let leases = 0;
   let text = '';
   let revision = 0;
@@ -100,6 +100,11 @@ function serviceFixture(f: ReturnType<typeof fixture>, writable = false,
       if (revision !== expected) return false;
       text = value; revision++;
       return true;
+    },
+    captureSend: () => {
+      const submit = options.submit;
+      if (!submit) assert.fail('Draft-only recorder tests must not submit');
+      return { send: submit, cancel() {} };
     },
     block: () => { leases++; let held = true; return () => { if (held) leases--; held = false; }; },
   };
@@ -163,6 +168,42 @@ test('real recorder pipeline seals on navigation, writes a hidden draft and clos
     assert.equal(socket.closed, 1);
     assert.equal(s.service.hasRetainedRecording(s.draft.id), false);
   }
+});
+test('active hold submits only after the real VAD pipeline drains every committed result', async t => {
+  const f = fixture();
+  let submissions = 0;
+  let acknowledge!: (result: DraftSendResult) => void;
+  const reply = new Promise<DraftSendResult>(resolve => { acknowledge = resolve; });
+  const s = serviceFixture(f, true, { submit: async revision => {
+    submissions++;
+    assert.equal(revision, s.draft.getSnapshot().revision);
+    assert.equal(s.leases(), 0);
+    assert.equal(s.draft.getSnapshot().text, 'complete message');
+    return reply;
+  } });
+  t.after(() => s.service.dispose());
+  const starting = s.service.start('hold'); f.grant(f.stream); await starting;
+  f.pcm(); await pump();
+  const socket = f.sockets[0]!; socket.autoClear = false;
+  socket.commit();
+  socket.emit('conversation.item.input_audio_transcription.delta',
+    { item_id: 'same-provider-id', content_index: 0, delta: 'partial message' });
+  assert.equal(s.draft.getSnapshot().text, 'partial message');
+  assert.equal(submissions, 0);
+  const released = s.service.releaseHold();
+  s.service.clearTarget(s.draft.id);
+  await pump();
+  socket.emit('error', { error: { code: 'input_audio_buffer_commit_empty', event_id: 'speech-final-commit' } });
+  socket.emit('input_audio_buffer.cleared'); await turn();
+  assert.equal(submissions, 0, 'input drain is not the final transcript acknowledgement');
+  socket.final('complete message'); await turn();
+  assert.equal(submissions, 1);
+  assert.equal(socket.closed, 1);
+  assert.equal(f.track.readyState, 'ended');
+  assert.equal(s.service.hasRetainedRecording(s.draft.id), true, 'native send ACK still owns audio retention');
+  acknowledge({ status: 'acknowledged' }); await released;
+  assert.equal(s.service.hasRetainedRecording(s.draft.id), false);
+  assert.equal(submissions, 1);
 });
 test('a genuinely too-short take interrupted by navigation is discarded without a retry or commit', async t => {
   const f = fixture(); const s = serviceFixture(f);

@@ -87,7 +87,7 @@ The returned WebSocket origin/path is locally constructed and strictly validated
   asks the host for a synchronous guarded write. Revision, pending/unconfirmed,
   competing leases, retirement, revocation and persistence failure remain host
   boundaries. On conflict, audio and text remain until manual insertion/discard;
-  no hidden textarea lookup or native send is used. The visible target only
+  no hidden textarea lookup is used. The visible target only
   governs starting/retrying, focus and UI projection, never background ownership.
 - Each live composed snapshot replaces the original selected region,
   advancing only the expected revision from its own write. External revisions,
@@ -95,9 +95,18 @@ The returned WebSocket origin/path is locally constructed and strictly validated
   composed result stays recoverable. Empty results never delete a selection;
   an empty final restores an owned provisional replacement. Superseded attempt
   callbacks cannot affect the new attempt. Clear/cancel preserve text already
-  written, and no messages are submitted automatically.
+  written. Only normal active hold release authorizes automatic submission.
   Recovery insertion releases retained audio only after a successful guarded
   write; displayed recovery controls do not depend on a later successful retry.
+- `draftSubmissionVersion: 1` plus explicit `sends: ['draft']` permits
+  `draft.captureSend()` on active hold release. Its one-shot `send(revision)`
+  uses original purpose/session, host native field projection, schema mutation
+  checkpoint and ACK handling. Speech calls it only after all VAD results finish
+  and the final guarded text checkpoint succeeds. Navigation after release
+  preserves intent; pre-release interruption and button stop never capture one.
+  Transcription retry keeps intent, but native blocked/unknown outcomes enter
+  `send-error`, not transcription retry. Audio remains until confirmed delivery
+  or explicit discard/retirement/teardown. Empty transcription never sends.
 
 Reused credentials may produce equal Azure session IDs despite isolated
 connections. Local object ownership and committed-item matching, not provider
@@ -145,7 +154,7 @@ release for a 64 CSS pixel upward swipe from the press origin. Once cancelled,
 ownership and timer clear before capture release, then existing speech
 cancellation destroys the recording. Other directions can leave the original
 input without cancelling. Release while starting cancels; only release during
-recording stops/transcribes. Unmount, temporary draft/host unavailability,
+recording captures send intent and stops/transcribes. Unmount, temporary draft/host unavailability,
 visibility loss, pointer capture loss, window blur, resize and Tab interrupt:
 they detach gesture ownership and stop/transcribe without discarding audio.
 Escape and upward swipe still explicitly cancel. Late release/capture-loss events
@@ -188,7 +197,8 @@ never production configuration or user recordings. They cover:
 - Live revision ownership, silent selection preservation, empty-final restoration,
   late callbacks, whole-audio retry without text duplication and held live updates.
 - Input/status composition, truthful progress, native props/ref/IME preservation,
-  exact draft/revision conflicts, retained recovery and no automatic submission.
+  exact draft/revision conflicts, retained recovery, draft-only button/interruption
+  and exactly-once original-draft submission after active hold release.
 - Tap/hold timing, upward swipe despite capture, irreversible cancellation,
   startup release, late permission grants, capture loss and interruption cleanup.
 - Source/SDK identity, package closure and reproducibility.

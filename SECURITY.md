@@ -30,17 +30,23 @@ cannot establish the resource's retention policy, access controls, region
 availability or suitability for sensitive recordings. Public deployment still
 depends on the host's authenticated, digest-bound module request boundary.
 
-Draft insertion is not permission to submit. The module never invokes native
-session/ask/plan APIs, schedules, host audio proxies or process
-control. Context text is untrusted reference vocabulary, never executable
-instructions to this module.
+Draft insertion alone is not permission to submit. The module explicitly
+declares `sends: ['draft']` and obtains the host's captured, one-shot submission
+capability only on normal active hold release. It submits through the original
+draft's native prompt/ask/plan semantics, never a current-input DOM click or an
+arbitrary session/payload API. Button entry and pre-release interruption remain
+draft-only. Changed text/attachment content and stale/retired drafts block
+automatic submission; unknown acknowledgements never trigger automatic replay.
+The module does not invoke schedules, host audio proxies or process control.
+Context text is untrusted reference vocabulary, never executable instructions.
 
 Each draft can retain at most 120 seconds of PCM audio in browser memory (5.76 MB
 raw, plus temporary encoding overhead). There is one active microphone, but no
 limit on independently retained draft tasks or concurrent connections; unresolved
 tasks can grow memory use. Failure preserves audio for explicit replay into a new
 connection, never a new draft. Navigation, visibility loss and host disconnect
-end capture without clearing the recording. Reliable host-guarded insertion,
+end capture without clearing the recording. Reliable host-guarded insertion
+(or confirmed native submission for released holds),
 explicit discard, authoritative permanent draft retirement, a confirmed
 `AUDIO_TOO_SHORT` failure, or module/page teardown clears it. Conflict recovery
 retains audio as well as recognized text.

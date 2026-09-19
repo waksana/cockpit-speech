@@ -10,7 +10,7 @@ const settle = () => new Promise<void>(resolve => setImmediate(resolve));
 
 async function fixture(t: TestContext, pointerType: 'mouse' | 'touch') {
   t.mock.timers.enable({ apis: ['setTimeout'] });
-  let captures = 0, contexts = 0, requests = 0, trackStops = 0, focuses = 0, leases = 0;
+  let captures = 0, contexts = 0, requests = 0, trackStops = 0, focuses = 0, leases = 0, intents = 0;
   let grant!: (stream: unknown) => void;
   const permission = new Promise(resolve => { grant = resolve; });
   const track = { readyState: 'live', stop() { trackStops++; this.readyState = 'ended'; } };
@@ -66,7 +66,7 @@ async function fixture(t: TestContext, pointerType: 'mouse' | 'touch') {
   const host = { getSnapshot: () => ({ sessionId: 's', visible: true, connected: true }), subscribe: () => () => {} };
   let service!: SpeechService;
   const context = {
-    apiVersion: 2, uiVersion: 1, chatWindowVersion: 1, composerInputVersion: 1, draftLifecycleVersion: 1,
+    apiVersion: 2, uiVersion: 1, chatWindowVersion: 1, composerInputVersion: 1, draftLifecycleVersion: 1, draftSubmissionVersion: 1,
     signal: new AbortController().signal,
     request: (_path: string, init: RequestInit) => {
       requests++;
@@ -109,6 +109,10 @@ async function fixture(t: TestContext, pointerType: 'mouse' | 'touch') {
       blocks: leases ? [{ id: 'lease', reason: 'speech' }] : [] }),
     editText: () => assert.fail('no transcript expected'),
     editTextIfRevision: () => assert.fail('no transcript expected'),
+    captureSend: () => {
+      intents++;
+      return { send: async () => assert.fail('incomplete transcription must not submit'), cancel() {} };
+    },
     block: () => { leases++; return () => { leases--; }; },
   };
   const frontend = await activate(context);
@@ -165,7 +169,7 @@ async function fixture(t: TestContext, pointerType: 'mouse' | 'touch') {
     service, render, event, grant: () => grant(stream),
     holding: () => gesture.getSnapshot(),
     clickMic: () => { ((tree.children[1] as Element).props.onClick as () => void)(); return render(); },
-    values: () => ({ captures, contexts, requests, trackStops, focuses, leases, captured }),
+    values: () => ({ captures, contexts, requests, trackStops, focuses, leases, intents, captured }),
   };
 }
 
@@ -184,7 +188,7 @@ for (const pointerType of ['mouse', 'touch'] as const) {
     assert.equal(f.values().focuses, 1, 'completed click focuses synchronously');
     t.mock.timers.tick(HOLD_DELAY + 1);
     assert.equal(f.render(), null);
-    assert.deepEqual(f.values(), { captures: 0, contexts: 0, requests: 0, trackStops: 0, focuses: 1, leases: 0, captured: false });
+    assert.deepEqual(f.values(), { captures: 0, contexts: 0, requests: 0, trackStops: 0, focuses: 1, leases: 0, intents: 0, captured: false });
   });
 
   test(`${pointerType}: threshold starts real permission feedback, recording and release`, async t => {
@@ -201,12 +205,14 @@ for (const pointerType of ['mouse', 'touch'] as const) {
     assert.equal((f.render()!.children[1] as Element).children[0], '正在录音');
     f.event('onPointerUp');
     assert.equal(f.service.getSnapshot().phase, 'stopping');
+    assert.equal(f.values().intents, 1, 'only active release captures the original draft send intent');
     assert.equal(f.values().trackStops, 1);
     f.event('onClick');
     assert.equal(f.values().focuses, 0);
     f.service.clear(); await settle();
     assert.equal(f.render(), null);
     assert.equal(f.values().leases, 0);
+    assert.equal(f.values().intents, 1, 'clear does not capture or dispatch another intent');
   });
 
   test(`${pointerType}: cancellation before and during permission never revives late media`, async t => {
@@ -219,6 +225,7 @@ for (const pointerType of ['mouse', 'touch'] as const) {
           const row = f.event(reason, reason === 'onPointerMove' ? { clientY: 20 - CANCEL_DISTANCE } : {});
           assert.equal(row, null);
           assert.equal(f.holding(), false);
+          assert.equal(f.values().intents, 0);
           assert.equal(f.service.getSnapshot().phase, 'idle');
           f.grant(); await settle();
           t.mock.timers.tick(HOLD_DELAY + 1);
@@ -243,6 +250,7 @@ test('microphone button still starts permission immediately without a pending ho
   assert.equal(f.service.getSnapshot().phase, 'permission');
   assert.equal(f.values().captures, 1);
   assert.equal(f.holding(), false);
+  assert.equal(f.values().intents, 0);
   ((row.children[3] as Element).props.onClick as () => void)();
   f.grant(); await settle();
   assert.equal(f.render(), null);

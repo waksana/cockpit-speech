@@ -38,6 +38,7 @@ function makeDraft(id: string, sessionId = 's', purpose: DraftPurpose = { kind: 
       this.editText(text);
       return true;
     },
+    captureSend: () => assert.fail('Interruption must not capture send permission'),
     block(reason) {
       if (state.getSnapshot().retired) throw new Error('Draft retired');
       const id = String(++lease);
