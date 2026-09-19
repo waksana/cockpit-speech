@@ -261,6 +261,87 @@ test('normal initial resume is allowed; silent invalid track/context states fail
     assert.equal(f.values().closes, 1);
   }
 });
+test('a pre-permission resume parked by WebKit is re-evaluated once capture is granted', async () => {
+  const f = fixture(); const s = serviceFixture(f);
+  f.context.state = 'suspended';
+  let resumes = 0;
+  let granted = false;
+  let resolveInitial!: () => void;
+  f.context.resume = () => {
+    resumes++;
+    if (!granted) return new Promise(resolve => { resolveInitial = resolve; });
+    f.context.state = 'running'; f.context.onstatechange?.();
+    resolveInitial(); return Promise.resolve();
+  };
+  const starting = s.service.start('hold');
+  await turn();
+  assert.equal(resumes, 1);
+  assert.equal(s.service.getSnapshot().phase, 'permission');
+  assert.equal(s.leases(), 1);
+  granted = true; f.grant(f.stream); await starting;
+  assert.equal(resumes, 2);
+  assert.equal(f.values().captures, 1, 'resume retry does not request a second microphone stream');
+  assert.equal(s.service.getSnapshot().phase, 'recording');
+  f.pcm(); await pump();
+  assert.equal(f.sockets[0]!.sent.filter(item => item.type === 'input_audio_buffer.append').length, 1);
+  s.service.cancel();
+  assert.equal(s.leases(), 0);
+  assert.equal(f.values().stops, 1); assert.equal(f.values().closes, 1);
+  s.service.dispose();
+});
+test('running contexts do not resume twice and cancelled late grants cannot re-activate audio', async () => {
+  for (const cancelled of [false, true]) {
+    const f = fixture();
+    let resumes = 0;
+    f.context.state = cancelled ? 'suspended' : 'running';
+    f.context.resume = () => {
+      resumes++;
+      return cancelled ? new Promise(() => {}) : Promise.resolve();
+    };
+    const controller = new AbortController();
+    const starting = f.prepare(controller.signal).start(async () => credential());
+    const outcome = cancelled ? assert.rejects(starting, { name: 'AbortError' }) : starting;
+    if (cancelled) controller.abort();
+    f.grant(f.stream);
+    await outcome;
+    assert.equal(resumes, 1);
+    if (!cancelled) (await starting).cancel();
+    assert.equal(f.values().stops, 1);
+    assert.equal(f.values().closes, 1);
+  }
+});
+test('a failed post-permission resume releases hardware and the draft lease', async () => {
+  const f = fixture(); const s = serviceFixture(f);
+  f.context.state = 'suspended';
+  let resumes = 0;
+  f.context.resume = () => ++resumes === 1 ? new Promise(() => {}) : Promise.reject(new Error('Synthetic resume failure'));
+  const start = s.service.start('hold'); f.grant(f.stream); await start;
+  assert.equal(resumes, 2);
+  assert.equal(s.service.getSnapshot().phase, 'retry');
+  assert.equal(s.leases(), 0);
+  assert.equal(f.values().stops, 1); assert.equal(f.values().closes, 1);
+  s.service.dispose();
+});
+test('cancelling while the post-permission resume is pending cannot start a late processor', async () => {
+  const f = fixture(); const s = serviceFixture(f);
+  f.context.state = 'suspended';
+  const resumes: (() => void)[] = [];
+  f.context.resume = () => new Promise(resolve => { resumes.push(resolve); });
+  let processors = 0;
+  const createWorklet = f.env.createWorklet;
+  f.env.createWorklet = context => { processors++; return createWorklet(context); };
+  const starting = s.service.start('hold'); f.grant(f.stream); await turn();
+  assert.equal(resumes.length, 2);
+  assert.equal(s.service.getSnapshot().phase, 'permission');
+  s.service.cancel(); await starting;
+  for (const resolve of resumes) resolve();
+  await turn();
+  assert.equal(processors, 0);
+  assert.equal(s.service.getSnapshot().phase, 'idle');
+  assert.equal(s.leases(), 0);
+  assert.equal(f.values().stops, 1); assert.equal(f.values().closes, 1);
+  s.service.dispose();
+});
 test('cancelled permission grants stop tracks and cannot reopen the recording', async () => {
   const f = fixture(); const controller = new AbortController();
   const pending = f.prepare(controller.signal).start(async () => credential());
@@ -268,17 +349,21 @@ test('cancelled permission grants stop tracks and cannot reopen the recording', 
   await assert.rejects(pending, { name: 'AbortError' });
   assert.equal(f.values().stops, 1); assert.equal(f.values().closes, 1);
 });
-test('permission, worklet, connection, tail, backpressure and final waits have bounded failure paths', async t => {
+test('permission, resume, worklet, connection, tail, backpressure and final waits have bounded failure paths', async t => {
   t.mock.timers.enable({ apis: ['setTimeout', 'Date'] });
-  for (const stage of ['permission', 'worklet', 'connection', 'tail', 'backpressure', 'final']) {
+  for (const stage of ['permission', 'resume', 'worklet', 'connection', 'tail', 'backpressure', 'final']) {
     const f = fixture(); const s = serviceFixture(f);
+    if (stage === 'resume') {
+      f.context.state = 'suspended';
+      f.context.resume = () => new Promise(() => {});
+    }
     if (stage === 'worklet') f.context.audioWorklet.addModule = () => new Promise(() => {});
     const original = f.env.openSocket;
     if (stage === 'connection') f.env.openSocket = url => { const socket = original(url); f.sockets.at(-1)!.autoConfig = false; return socket; };
     const start = s.service.start();
     if (stage !== 'permission') f.grant(f.stream);
     await turn();
-    if (stage === 'permission' || stage === 'worklet') {
+    if (stage === 'permission' || stage === 'resume' || stage === 'worklet') {
       t.mock.timers.tick(30_001); await start;
     } else {
       await start; f.pcm();

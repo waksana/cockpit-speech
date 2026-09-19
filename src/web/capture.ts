@@ -65,12 +65,17 @@ export class AudioCapture {
         else if (running || context.state === 'closed') this.broken(new SpeechError('AUDIO_FAILED', '音频设备已暂停或关闭。'));
       };
       const resume = context.resume();
-      // Permission and audio activation are initiated in the click, independently of credentials.
+      // Permission and audio activation start together, independently of credentials.
       const permission = this.env.getUserMedia({ audio: { channelCount: 1, echoCancellation: true, noiseSuppression: true }, video: false })
-        .then(stream => {
+        .then(async stream => {
           if (signal.aborted || this.closed) { for (const track of stream.getTracks()) track.stop(); signal.throwIfAborted(); throw abortError(); }
           this.microphone = stream;
           for (const track of stream.getTracks()) track.onended = () => this.broken(new SpeechError('AUDIO_FAILED', '麦克风已断开。'));
+          // WebKit can leave the pre-permission resume pending until retried while capturing.
+          if (context.state === 'suspended') {
+            signal.throwIfAborted();
+            await context.resume();
+          }
           return stream;
         });
       const module = context.audioWorklet.addModule(new URL('./capture-worklet.js', import.meta.url));

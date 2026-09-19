@@ -21,9 +21,15 @@ The returned WebSocket origin/path is locally constructed and strictly validated
   one minute and stops reusing them 30 seconds before Azure expiry. Retry requests
   fresh credentials, also picking up changed file configuration. Aborted requests
   cannot populate the cache. Disposal clears it.
-- `capture.ts` initiates microphone permission and context resume in the click,
+- `capture.ts` initiates microphone permission and context resume together,
   without waiting for credentials. It watches device/context failure from setup,
   checks final readiness, and consumes the packaged worklet's ordered messages.
+  If the context is still suspended after microphone permission resolves, it
+  calls resume once more while the document is capturing. WebKit can leave the
+  initial pre-permission resume pending when a hold lacks transient activation;
+  the new call re-evaluates that condition. It does not acquire a second stream,
+  loop, revive a cancelled capture, or mark the editor ready before the graph is
+  actually running. The existing bounded startup timeout still applies.
 - `capture-worklet.ts` and `pcm.ts` produce 24 kHz mono little-endian PCM16 chunks.
   Native Web Audio resamples the requested 24 kHz context; the streaming encoder
   also handles other context sample rates. Render-sample counting bounds the
