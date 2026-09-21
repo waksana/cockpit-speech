@@ -69,7 +69,7 @@ async function fixture(t: TestContext, pointerType: 'mouse' | 'touch') {
   const host = { getSnapshot: () => ({ sessionId: 's', visible: true, connected: true }), subscribe: () => () => {} };
   let service!: SpeechService;
   const context = {
-    apiVersion: 2, uiVersion: 1, chatWindowVersion: 1, composerInputVersion: 1, draftLifecycleVersion: 1, draftSubmissionVersion: 1,
+    apiVersion: 2, uiVersion: 1, uiSurfaceVersion: 1, chatWindowVersion: 1, composerInputVersion: 1, draftLifecycleVersion: 1, draftSubmissionVersion: 1,
     signal: controller.signal,
     request: (_path: string, init: RequestInit) => {
       requests++;

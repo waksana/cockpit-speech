@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
+import { readFile } from 'node:fs/promises';
 import type { ComposerInputProps, ModuleDraft, ModuleFrontendContext } from '@cockpit/module-api';
 import { activate, composeEditorRef } from './index.ts';
 import type { SpeechService, SpeechSnapshot } from './speech.ts';
@@ -23,12 +24,21 @@ test('editor refs preserve object refs, callback nulls and React 19 cleanup', ()
   assert.equal(cleaned, 1); assert.equal(local.current, null);
 });
 test('frontend requires additive capabilities rather than assuming them from API v2', () => {
-  for (const patch of [{ chatWindowVersion: undefined }, { composerInputVersion: undefined }, { draftLifecycleVersion: undefined }, { draftSubmissionVersion: undefined }]) {
+  for (const patch of [{ uiSurfaceVersion: undefined }, { uiSurfaceVersion: 0 }, { uiSurfaceVersion: 2 }, { chatWindowVersion: undefined }, { composerInputVersion: undefined }, { draftLifecycleVersion: undefined }, { draftSubmissionVersion: undefined }]) {
     assert.throws(() => activate({
-      apiVersion: 2, uiVersion: 1, chatWindowVersion: 1, composerInputVersion: 1, draftLifecycleVersion: 1, draftSubmissionVersion: 1,
+      apiVersion: 2, uiVersion: 1, uiSurfaceVersion: 1, chatWindowVersion: 1, composerInputVersion: 1, draftLifecycleVersion: 1, draftSubmissionVersion: 1,
       state: { chatWindow: {}, bindDraft() {} }, ...patch,
     } as unknown as ModuleFrontendContext), /配套宿主/);
   }
+});
+
+test('recovery surfaces and controls reuse public presentation without copying host styles', async () => {
+  const css = await readFile(new URL('./styles.css', import.meta.url), 'utf8');
+  const panel = css.match(/\.cockpit-speech-panel\s*\{([^}]+)\}/)![1]!;
+  const mic = css.match(/\.cockpit-speech-mic\s*\{([^}]+)\}/)![1]!;
+  assert.doesNotMatch(panel, /background:|border:|border-radius:|padding:|font-size:|color:/);
+  assert.doesNotMatch(mic, /width:|height:|padding:|border-radius:|box-sizing:/);
+  assert.doesNotMatch(css, /cockpit-speech-retry|var\(--(?:host|chat)-/);
 });
 
 test('input middleware preserves native textarea props and keeps decision microphones separate from feedback', async t => {
@@ -55,7 +65,7 @@ test('input middleware preserves native textarea props and keeps decision microp
   const cleanupEffects = () => { for (const cleanup of effects.splice(0).reverse()) cleanup(); };
   const host = { getSnapshot: () => ({ sessionId: 's', visible: true, connected: true }), subscribe: () => () => {} };
   const context = {
-    apiVersion: 2, uiVersion: 1, chatWindowVersion: 1, composerInputVersion: 1, draftLifecycleVersion: 1, draftSubmissionVersion: 1,
+    apiVersion: 2, uiVersion: 1, uiSurfaceVersion: 1, chatWindowVersion: 1, composerInputVersion: 1, draftLifecycleVersion: 1, draftSubmissionVersion: 1,
     signal: new AbortController().signal, request: async () => { throw new Error('No HTTP from render'); }, report() {},
     createPortal: () => assert.fail('recording feedback must stay in normal component flow'),
     react: {
@@ -201,6 +211,7 @@ test('input middleware preserves native textarea props and keeps decision microp
         assert.equal(button.props.disabled, busy || current === 'retry' || current === 'send-error');
         assert.equal(button.props['aria-busy'], busy);
         assert.equal(button.props['aria-pressed'], current === 'recording');
+        assert.equal(String(button.props.className).includes('ck-danger'), current === 'retry');
         assert.notEqual(button.props['aria-label'], '取消语音输入');
         if (current === 'sending') {
           assert.equal(button.props['aria-label'], '正在发送');
@@ -318,7 +329,9 @@ test('input middleware preserves native textarea props and keeps decision microp
     recovery = { id: 'prompt', sessionId: 's', purpose: 'prompt', text: 'synthetic message' };
     error = '发送结果未确认，可能已提交；不会自动重发。';
     const unknown = Panel()!;
+    assert.equal(unknown.props.className, 'ck-surface cockpit-speech-panel');
     const recovered = unknown.children[0] as Element;
+    assert.equal((recovered.children[2] as Element).props.className, 'ck-actions cockpit-speech-recovery-actions');
     assert.equal((recovered.children[1] as Element).children[0], '识别结果（发送状态未确认）');
     const statusRow = Status()!;
     assert.equal((statusRow.children[1] as Element).children[0], error);

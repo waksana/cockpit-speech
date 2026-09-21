@@ -16,6 +16,7 @@ test('backend has one credential route, rereads file configuration and never ret
   const controller = new AbortController();
   let requests = 0;
   const context: ModuleBackendContext = {
+    serviceReadyVersion: 1, host: { call() { assert.fail('Speech does not call host intents'); } },
     apiVersion: 1, moduleId: 'cockpit-speech', dataRoot, apiBase: '/api/module',
     config: {}, signal: controller.signal, report: () => assert.fail('no private error should be reported'),
     invalidate() {}, publish() {},
@@ -53,6 +54,7 @@ test('backend bounds concurrent credential requests and combines request/module 
   let started!: () => void;
   const observed = new Promise<void>(resolve => { started = resolve; });
   const backend = activate({
+    serviceReadyVersion: 1, host: { call() { assert.fail('Speech does not call host intents'); } },
     apiVersion: 1, moduleId: 'cockpit-speech', dataRoot, apiBase: '/api/module', config: {}, signal: controller.signal,
     report() {}, invalidate() {}, publish() {},
   }, { issue: async (_config, _input, signal) => new Promise((_resolve, reject) => {

@@ -18,10 +18,10 @@ export function composeEditorRef(local: { current: HTMLTextAreaElement | null },
 }
 
 export const activate: ActivateFrontend = context => {
-  if (context.apiVersion !== 2 || context.uiVersion !== 1 || context.chatWindowVersion !== 1
+  if (context.apiVersion !== 2 || context.uiVersion !== 1 || context.uiSurfaceVersion !== 1 || context.chatWindowVersion !== 1
     || context.composerInputVersion !== 1 || context.draftLifecycleVersion !== 1 || context.draftSubmissionVersion !== 1
     || !context.state?.chatWindow || !context.state.bindDraft) {
-    throw new Error('语音模块需要前端 API v2、UI v1、chatWindow v1、composerInput v1、draftLifecycle v1 和 draftSubmission v1，请先升级配套宿主。');
+    throw new Error('语音模块需要前端 API v2、UI v1、uiSurfaceVersion v1、chatWindow v1、composerInput v1、draftLifecycle v1 和 draftSubmission v1，请先升级配套宿主。');
   }
   const React = context.react;
   const h = React.createElement;
@@ -88,12 +88,12 @@ export const activate: ActivateFrontend = context => {
     React.useSyncExternalStore(context.state.host.subscribe, context.state.host.getSnapshot);
     const active = state.phase !== 'idle' && state.phase !== 'retry' && state.phase !== 'send-error';
     const recovery = state.recovery;
-    return (!active && recovery) ? h('section', { className: 'cockpit-speech-panel', 'aria-label': '识别结果恢复' },
+    return (!active && recovery) ? h('section', { className: 'ck-surface cockpit-speech-panel', 'aria-label': '识别结果恢复' },
       recovery ? h(React.Fragment, null,
         state.error || state.notice ? h('p', { role: 'status' }, state.error ?? state.notice) : null,
         h('label', null, state.sendOutcome === 'unconfirmed' ? '识别结果（发送状态未确认）' : '识别结果（未发送）',
           h('textarea', { className: 'ck-input', value: recovery.text, readOnly: true, rows: 4 })),
-        h('div', { className: 'cockpit-speech-recovery-actions' },
+        h('div', { className: 'ck-actions cockpit-speech-recovery-actions' },
           h('button', { type: 'button', className: 'ck-button', onClick: () => {
             void (async () => {
               try { await navigator.clipboard.writeText(recovery.text); }
@@ -208,7 +208,7 @@ export const activate: ActivateFrontend = context => {
                       : retry ? `语音失败，点击重试。${state.error ?? ''}` : '开始语音输入';
         const disabled = sendError || busy || (!active && (props.disabled || props.sendBlocked || !(retry ? speech.canRetry(draft.id) : speech.canStart(draft.id))));
         const button = h('button', {
-          type: 'button', className: `ck-icon-button cockpit-speech-mic${retry ? ' cockpit-speech-retry' : ''}`, disabled,
+          type: 'button', className: `ck-icon-button cockpit-speech-mic${retry ? ' ck-danger' : ''}`, disabled,
           'aria-label': label, title: state.error ?? (state.phase === 'idle'
             ? `${label}；空输入可在网页内按住 F8 说话，松开发送（无需聚焦输入框，Fn 由设备决定）` : label),
           'aria-pressed': state.phase === 'recording', 'aria-busy': busy,

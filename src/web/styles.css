@@ -22,17 +22,8 @@
   -webkit-touch-callout: none;
 }
 .cockpit-speech-mic {
-  box-sizing: border-box;
-  flex: 0 0 var(--ck-control-size);
-  width: var(--ck-control-size);
-  height: var(--ck-control-size);
-  min-width: var(--ck-control-size);
-  min-height: var(--ck-control-size);
-  padding: 0;
-  border-radius: 50%;
   overflow: hidden;
 }
-.cockpit-speech-mic.cockpit-speech-retry { color: var(--ck-color-danger); }
 .cockpit-speech-key-hint { margin-inline-start: 0.25em; }
 @media (pointer: coarse) {
   .cockpit-speech-key-hint { display: none; }
@@ -69,12 +60,6 @@
   max-height: 35dvh;
   margin-block: 0.5rem 0.75rem;
   overflow-y: auto;
-  color: var(--ck-color-text);
-  background: var(--ck-color-surface);
-  border: 1px solid var(--ck-color-border);
-  border-radius: var(--ck-radius);
-  padding: 0.75rem;
-  font-size: 0.875rem;
   overflow-wrap: anywhere;
 }
 .cockpit-speech-panel p { margin: 0 0 0.5rem; }
@@ -84,4 +69,4 @@
   width: 100%;
   margin: 0.5rem 0;
 }
-.cockpit-speech-recovery-actions { display: flex; flex-wrap: wrap; gap: 0.5rem; margin-bottom: 0.5rem; }
+.cockpit-speech-recovery-actions { margin-bottom: 0.5rem; }

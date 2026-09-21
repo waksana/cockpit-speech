@@ -1,5 +1,14 @@
 # Cockpit Speech
 
+The current source pairs with Cockpit commit
+`9fd5204bda99a8bd65b2c5ef152cc47ce87837d5` (exported SDK version 0.2.6).
+Recovery UI consumes public `ck-surface` and `ck-actions`; activation requires
+both `context.uiVersion === 1` and `context.uiSurfaceVersion === 1` before
+registering contributions. Missing/unsupported surface capability is rejected.
+These are unreleased current-source capabilities, not a claim about historical
+0.2.6 assets. Gesture, recovery limits, native input and submission ownership
+are unchanged; no private host components or separate React runtime are used.
+
 Standalone, GPL-3.0-only Cockpit dictation using **Azure OpenAI gpt-transcribe,
 browser-direct WebSocket, local audio buffering and captured chat context**.
 The backend only exchanges its resource key for short-lived credentials; it

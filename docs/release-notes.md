@@ -5,7 +5,14 @@ editor focus or opening the mobile keyboard. Dismissing recovery no longer
 focuses the editor. A completed short tap and explicit recovery insertion retain
 their intentional editor activation. F8, recording/submission and draft ownership
 semantics are unchanged; no focus-visible mode tracker or outline suppression is
-introduced. Public capabilities and exact host SDK pin remain unchanged.
+introduced.
+
+The unreleased shared UI migration reuses public recovery surfaces/action rows
+and requires `context.uiSurfaceVersion === 1` alongside UI v1 before registration.
+The exact paired host source is `9fd5204bda99a8bd65b2c5ef152cc47ce87837d5`
+(exported SDK 0.2.6). The previous pin and historical UI-v1 releases do not
+establish support for this new capability. Gesture, recovery and send semantics
+remain unchanged; no extra React runtime or private host dependency is introduced.
 This is not a tag, publication, deployment or actual microphone/provider test.
 
 # Cockpit Speech 0.8.2
