@@ -1,5 +1,47 @@
 # Development and verification
 
+## Parallel presentation boundary
+
+`frontend.ts` owns activation, the `SpeechService` registration, F8 listener
+lifetime, editor refs, target binding, pointer gestures and focus effects.
+It accepts `ModuleFrontendServices` and imports neither presentation. Classic
+`index.ts` keeps its existing UI capability guard and rendering; `next/index.ts`
+checks the independent public component namespace and renders a new inline voice
+workflow. Both use the same capture/PCM/transport/transcript/draft/send logic.
+
+Next uses only the injected host React and public Button, Label, Textarea and
+Alert family. The actual editing surface remains `Base`, not a second Textarea.
+The public Textarea displays recoverable text only. No module-local shadcn
+component or extra runtime dependency is currently needed. Its `csp-next-*` CSS
+inherits host theme variables and ships separately, without preflight, theme
+overrides or assumptions about host Tailwind scanning module source. Classic
+assets must never import the next entry or stylesheet.
+
+Both activations install one `beforeunload` listener. Its synchronous
+`SpeechService.hasUnpersistedWork()` query inspects all operation owners, not only
+the visible target or current draft blockers. Active permission/capture/flush/
+transcription/send, retained audio, recovery and uncertain send outcomes warn.
+Startup errors with no retained resources and ordinary persisted drafts do not.
+The listener only prevents unload and sets the browser confirmation flag; it
+never mutates an operation. Abort/disposal removes it. Actual page departure
+retains existing teardown semantics: no audio transfer, persistence, automatic
+replay or guaranteed delivery is introduced.
+
+Next feedback separates polite phase/error text from the rapidly changing sample
+meter/time. It keeps explicit cancellation during recording and pending work,
+manual retry only for transcription/startup failure, and no resend control after
+unknown native acknowledgement. Recovery insertion remains original-draft-only;
+clipboard failure falls back to the visible selectable result. Both presentations
+share the same guarded copy operation and native input wiring.
+
+The Node gesture suite exercises both entries with the same permission, pointer,
+keyboard and focus fixtures. The next feedback suite checks public component
+composition, recovery controls, announcements and dependency/style isolation;
+service cases cover hidden-draft unload protection after blocker release.
+Existing classic browser fixtures remain classic-specific; they must not be
+described as acceptance of the new host composer. Paired next-host browser
+integration follows the coordinated SDK/runtime handoff.
+
 ## Backend boundary
 
 The sole route is `POST /session`, accepting only `{}` and returning
@@ -257,8 +299,12 @@ never production configuration or user recordings. They cover:
 
 Run `pnpm typecheck`, `pnpm test`, then `pnpm build`. Packaging requires a fresh
 build from clean committed source; use a new output directory and the existing
-package verifier. The precise host pin is in `tooling/host-sdk.json`; the package
-requires the paired Cockpit 0.2.6 public styles.
+package verifier. The precise host pin is in `tooling/host-sdk.json`: reachable foundation
+`0fa433d99c053df2caf80770f0f8762b9ed7002e`, API/protocol 0.3.0. This package requires
+Cockpit 0.3.0 with next-presentation support; older installers may reject
+`frontend.next` even when intending to use classic. Both entries preserve the
+same existing persisted draft encodings. The foundation does not establish
+completion or deployment of the final host application.
 
 The paired host regression imports the actual compiled middleware:
 

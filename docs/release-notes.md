@@ -1,3 +1,27 @@
+# Cockpit Speech 0.9.0 (source preparation)
+
+Proposed additive release for an independent shadcn presentation alongside the
+unchanged default classic UI. The new `frontend.next` entry uses actual host
+React components and its own isolated stylesheet. Recording, pointer/F8 input,
+draft ownership, transcription retry and captured native submission share one
+implementation across both presentations. Next combines phase feedback,
+explicit cancel/retry and selectable recovery in the composer.
+Pending retry keeps its focused action mounted. Removing an owned retry,
+cancel or discard action restores focus to a remaining Speech action in the
+same live composer, without activating text editing or taking focus elsewhere.
+
+Both entries add a non-destructive native `beforeunload` confirmation request for
+actual page-owned Speech work across all drafts, including retained/uncertain
+results without a current blocker. No persistence, cross-page transfer or replay
+is promised; browser confirmation may be suppressed by browser lifecycle rules.
+
+The next-capable SDK foundation pin is
+`0fa433d99c053df2caf80770f0f8762b9ed7002e`, API/protocol 0.3.0. Minimum paired host
+is Cockpit 0.3.0 with independent new-presentation support; older hosts may reject
+`frontend.next`. Both presentations retain existing persisted draft encodings.
+The foundation pin is not a released-host or completed host-app claim.
+This preparation is not a committed release artifact, tag, merge or deployment.
+
 # Cockpit Speech 0.8.4 (source preparation)
 
 Assign a fresh immutable package version to the merged shared-UI changes rather

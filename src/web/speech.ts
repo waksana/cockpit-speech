@@ -73,6 +73,11 @@ export class SpeechService {
   }
   getSnapshot = (id = this.target?.draft.id): SpeechSnapshot =>
     (id ? this.operations.get(id)?.state : undefined) ?? (id === this.target?.draft.id ? this.view : idle);
+  hasUnpersistedWork(): boolean {
+    return [...this.operations.values()].some(operation =>
+      !['idle', 'retry', 'send-error'].includes(operation.state.phase)
+      || !!operation.recording || !!operation.state.recovery || operation.state.sendOutcome === 'unconfirmed');
+  }
   subscribe = (listener: () => void): (() => void) => {
     this.listeners.add(listener);
     return () => { this.listeners.delete(listener); };

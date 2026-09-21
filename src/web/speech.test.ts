@@ -5,6 +5,7 @@ import { SpeechError } from '../shared/limits.ts';
 import { SpeechService } from './speech.ts';
 import type { Recording } from './recorder.ts';
 import { HOLD_DELAY, HoldGesture } from './hold.ts';
+import { protectSpeechUnload } from './frontend.ts';
 
 function deferred<T>() {
   let resolve!: (value: T) => void;
@@ -112,6 +113,65 @@ function fixture(options: { permission?: boolean; purpose?: DraftPurpose; ready?
     level: (value: number, index = levels.length - 1, seconds = 12.5) => levels[index]!(value, seconds),
     text: (value: string, index = texts.length - 1) => texts[index]!(value) };
 }
+test('unload protection includes hidden recording, retry and recovery without draft blockers', async t => {
+  for (const phase of ['permission', 'recording', 'transcribing', 'retry', 'recovery'] as const) {
+    await t.test(phase, async t => {
+      const f = fixture({ permission: phase === 'permission' });
+      t.after(() => f.service.dispose());
+      const target = new EventTarget();
+      t.after(protectSpeechUnload(f.service, target));
+      const unload = () => {
+        const event = new Event('beforeunload', { cancelable: true });
+        target.dispatchEvent(event);
+        return event.defaultPrevented;
+      };
+      assert.equal(unload(), false, 'ordinary persisted draft text needs no module warning');
+      const start = f.service.start();
+      if (phase !== 'permission') await start;
+      if (phase === 'transcribing') void f.service.stop();
+      if (phase === 'retry') f.fail(new SpeechError('NETWORK_FAILED', 'Synthetic failure'));
+      if (phase === 'recovery') {
+        f.original.editText('external edit');
+        const stop = f.service.stop(); f.result.resolve('retained result'); await stop;
+      }
+      assert.equal(unload(), true);
+      f.service.clearTarget(f.original.id);
+      const other = draft('other');
+      f.service.setTarget({ draft: other, disabled: false, sendBlocked: false, selection: () => ({ start: 0, end: 0 }) });
+      if (phase === 'permission') {
+        f.permission.resolve(f.recording); await start;
+        assert.equal(unload(), false, 'departure cancels pending permission');
+      } else {
+        assert.equal(f.service.getSnapshot().phase, 'idle');
+        assert.equal(unload(), true, 'hidden original draft still owns nonpersisted work');
+        if (phase === 'retry' || phase === 'recovery') assert.equal(f.original.getSnapshot().blocks.length, 0);
+        const counters = f.values();
+        assert.equal(unload(), true);
+        assert.deepEqual(f.values(), counters, 'beforeunload cannot stop, clear or retry');
+        f.service.clear(f.original.id);
+        assert.equal(unload(), false);
+      }
+    });
+  }
+});
+test('startup error alone and successfully persisted text do not warn; retirement releases retained work', async t => {
+  const failed = fixture({ permission: true }); t.after(() => failed.service.dispose());
+  const starting = failed.service.start();
+  failed.permission.reject(new SpeechError('MIC_FAILED', 'Synthetic permission failure'));
+  await starting;
+  assert.equal(failed.service.getSnapshot().phase, 'retry');
+  assert.equal(failed.service.hasUnpersistedWork(), false);
+  const completed = fixture(); t.after(() => completed.service.dispose());
+  await completed.service.start();
+  const stopping = completed.service.stop(); completed.result.resolve('saved'); await stopping;
+  assert.equal(completed.service.hasUnpersistedWork(), false);
+  const retained = fixture(); t.after(() => retained.service.dispose());
+  await retained.service.start(); retained.fail(new SpeechError('NETWORK_FAILED', 'Synthetic failure'));
+  retained.service.clearTarget(retained.original.id);
+  assert.equal(retained.service.hasUnpersistedWork(), true);
+  retained.original.state.set({ ...retained.original.getSnapshot(), retired: true });
+  assert.equal(retained.service.hasUnpersistedWork(), false);
+});
 test('live snapshots replace the owned selection without focus; final completion confirms durable host insertion', async t => {
   for (const purpose of [{ kind: 'prompt' }, { kind: 'ask', requestId: 'a' }, { kind: 'plan', requestId: 'p' }] as const) {
     const f = fixture({ purpose }); t.after(() => f.service.dispose());

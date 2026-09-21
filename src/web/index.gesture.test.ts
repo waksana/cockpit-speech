@@ -1,7 +1,8 @@
 import assert from 'node:assert/strict';
-import { test, type TestContext } from 'node:test';
-import type { ComposerInputProps, ModuleDraft, ModuleFrontendContext } from '@cockpit/module-api';
+import { describe, test, type TestContext } from 'node:test';
+import type { ComposerInputProps, ModuleDraft, ModuleFrontendContext, ModuleNextFrontendContext } from '@cockpit/module-api';
 import { activate } from './index.ts';
+import { activate as activateNext } from './next/index.ts';
 import { CANCEL_DISTANCE, HOLD_DELAY, HoldGesture } from './hold.ts';
 import type { SpeechService } from './speech.ts';
 import { keyboardDOM } from './keyboard.fixture.test.ts';
@@ -9,7 +10,7 @@ import { keyboardDOM } from './keyboard.fixture.test.ts';
 type Element = { type: unknown; props: Record<string, unknown>; children: (Element | string | null)[] };
 const settle = () => new Promise<void>(resolve => setImmediate(resolve));
 
-async function fixture(t: TestContext, pointerType: 'mouse' | 'touch') {
+async function createFixture(t: TestContext, pointerType: 'mouse' | 'touch', presentation: 'classic' | 'next') {
   t.mock.timers.enable({ apis: ['setTimeout'] });
   let captures = 0, contexts = 0, requests = 0, trackStops = 0, focuses = 0, leases = 0, intents = 0;
   let grant!: (stream: unknown) => void;
@@ -71,6 +72,8 @@ async function fixture(t: TestContext, pointerType: 'mouse' | 'touch') {
   const context = {
     apiVersion: 2, uiVersion: 1, uiSurfaceVersion: 1, chatWindowVersion: 1, composerInputVersion: 1, draftLifecycleVersion: 1, draftSubmissionVersion: 1,
     signal: controller.signal,
+    ui: { version: 1, Button: 'Button', Label: 'Label', Textarea: 'Textarea',
+      Alert: 'Alert', AlertTitle: 'AlertTitle', AlertDescription: 'AlertDescription' },
     request: (_path: string, init: RequestInit) => {
       requests++;
       return new Promise<Response>((_resolve, reject) => {
@@ -83,6 +86,7 @@ async function fixture(t: TestContext, pointerType: 'mouse' | 'touch') {
       createElement: (type: unknown, props: Record<string, unknown> | null, ...children: Element['children']): Element =>
         ({ type, props: props ?? {}, children }),
       useRef: (value: unknown) => memo(() => ({ current: value }), []),
+      useId: () => 'speech-result',
       useState: (initial: unknown) => {
         const { slot, update } = changed([]);
         if (update) slot.value = initial;
@@ -105,7 +109,7 @@ async function fixture(t: TestContext, pointerType: 'mouse' | 'touch') {
         return { get: () => service };
       },
     },
-  } as unknown as ModuleFrontendContext;
+  } as unknown as ModuleFrontendContext & ModuleNextFrontendContext;
   const draft: ModuleDraft = {
     id: 'd', sessionId: 's', purpose: { kind: 'prompt' }, subscribe: () => () => {},
     getSnapshot: () => ({ text: '', revision: 0, pending: false, unconfirmed: false, retired: false, hasContent: false,
@@ -118,7 +122,7 @@ async function fixture(t: TestContext, pointerType: 'mouse' | 'touch') {
     },
     block: () => { leases++; return () => { leases--; }; },
   };
-  const frontend = await activate(context);
+  const frontend = await (presentation === 'classic' ? activate(context) : activateNext(context));
   t.after(() => {
     try { for (const slot of slots.toReversed()) slot.cleanup?.(); controller.abort(); service.dispose(); }
     finally { for (const restore of restoreGlobals) restore(); }
@@ -130,7 +134,8 @@ async function fixture(t: TestContext, pointerType: 'mouse' | 'touch') {
   if (input.boundary !== 'composerInput' || status.boundary !== 'composerEditor') assert.fail('missing middleware');
   const Input = input.wrap(() => null) as unknown as (props: ComposerInputProps) => Element;
   const StatusEditor = status.wrap(() => null) as unknown as (props: { draft: ModuleDraft }) => Element;
-  const Status = (StatusEditor({ draft }).children[0] as Element).type as (props: { id: string }) => Element | null;
+  const statusElement = StatusEditor({ draft }).children[presentation === 'classic' ? 0 : 1] as Element;
+  const Status = statusElement.type as (props: Record<string, unknown>) => Element | null;
   const editor = {
     ...dom.editor(),
     focus() { focuses++; this.ownerDocument.activeElement = this; },
@@ -147,7 +152,7 @@ async function fixture(t: TestContext, pointerType: 'mouse' | 'touch') {
     (base.props.editorRef as (node: unknown) => void)(editor);
     for (const effect of effects) effect();
     effects = [];
-    return Status({ id: draft.id });
+    return Status(statusElement.props);
   };
   assert.equal(render(), null);
   assert.equal(render(), null, 'render the target registered by the initial layout effect');
@@ -167,7 +172,8 @@ async function fixture(t: TestContext, pointerType: 'mouse' | 'touch') {
     return render();
   };
   return {
-    service, render, event, grant: () => grant(stream), dom, editor,
+    service, render, event, grant: () => grant(stream), dom, editor, dispose: () => frontend.dispose?.(),
+    abort: () => controller.abort(),
     updateProps: (patch: Partial<ComposerInputProps>) => { props = { ...props, ...patch }; render(); },
     key: (type: 'keydown' | 'keyup', patch?: Partial<KeyboardEvent>) => { const event = dom.key(type, patch); render(); return event; },
     holding: () => gesture.getSnapshot(),
@@ -175,6 +181,22 @@ async function fixture(t: TestContext, pointerType: 'mouse' | 'touch') {
     values: () => ({ captures, contexts, requests, trackStops, focuses, leases, intents, captured }),
   };
 }
+
+function text(element: Element | string | null): string {
+  return element === null ? '' : typeof element === 'string' ? element : element.children.map(text).join('');
+}
+function clearButton(element: Element): Element | undefined {
+  if (typeof element.props.onClick === 'function'
+    && (element.props['aria-label'] === '清除本次语音' || text(element) === '取消本次语音')) return element;
+  for (const child of element.children) {
+    if (child && typeof child !== 'string') {
+      const found = clearButton(child);
+      if (found) return found;
+    }
+  }
+}
+for (const presentation of ['classic', 'next'] as const) describe(presentation, () => {
+const fixture = (t: TestContext, pointerType: 'mouse' | 'touch') => createFixture(t, pointerType, presentation);
 
 for (const pointerType of ['mouse', 'touch'] as const) {
   test(`${pointerType}: short press stays internal through down, threshold wait, release and click`, async t => {
@@ -199,16 +221,16 @@ for (const pointerType of ['mouse', 'touch'] as const) {
     f.event('onPointerDown');
     t.mock.timers.tick(HOLD_DELAY);
     assert.equal(f.service.getSnapshot().phase, 'permission');
-    assert.equal((f.render()!.children[1] as Element).children[0], '正在准备录音…');
+    assert.match(text(f.render()), /正在准备录音|正在准备麦克风/);
     assert.equal(f.values().captures, 1);
     assert.equal(f.values().contexts, 1);
     assert.equal(f.values().requests, 1);
     f.grant(); await settle();
     assert.equal(f.service.getSnapshot().phase, 'recording');
-    assert.equal((f.render()!.children[1] as Element).children[0], '正在录音');
+    assert.match(text(f.render()), /正在录音/);
     f.event('onPointerUp');
     assert.equal(f.service.getSnapshot().phase, 'stopping');
-    assert.equal((f.render()!.children[1] as Element).children[0], '正在处理录音…');
+    assert.match(text(f.render()), /正在处理录音|正在收取录音尾部/);
     assert.equal(f.values().intents, 1, 'only active release captures the original draft send intent');
     assert.equal(f.values().trackStops, 1);
     f.event('onClick');
@@ -250,12 +272,12 @@ for (const pointerType of ['mouse', 'touch'] as const) {
 test('microphone button still starts permission immediately without a pending hold', async t => {
   const f = await fixture(t, 'mouse');
   const row = f.clickMic()!;
-  assert.equal((row.children[1] as Element).children[0], '正在准备录音…');
+  assert.match(text(row), /正在准备录音|正在准备麦克风/);
   assert.equal(f.service.getSnapshot().phase, 'permission');
   assert.equal(f.values().captures, 1);
   assert.equal(f.holding(), false);
   assert.equal(f.values().intents, 0);
-  ((row.children[3] as Element).props.onClick as () => void)();
+  (clearButton(row)!.props.onClick as () => void)();
   f.grant(); await settle();
   assert.equal(f.render(), null);
   assert.equal(f.values().trackStops, 1);
@@ -317,5 +339,30 @@ test('F8 and pending/active pointer gestures cannot take over each other or butt
       if (entry === 'pointer-pending') f.event('onPointerCancel');
       f.service.clear(); f.grant(); await settle();
     });
+
   }
+});
+test('activation unload protection is non-destructive and removed on disposal or abort', async t => {
+  for (const cleanup of ['dispose', 'abort'] as const) {
+    await t.test(cleanup, async t => {
+      const f = await fixture(t, 'mouse');
+      const unload = () => {
+        const event = new Event('beforeunload', { cancelable: true });
+        f.dom.window.dispatchEvent(event);
+        return event.defaultPrevented;
+      };
+      assert.equal(unload(), false);
+      f.clickMic();
+      const before = f.service.getSnapshot();
+      const counters = f.values();
+      assert.equal(unload(), true);
+      assert.equal(unload(), true, 'cancelled navigation leaves the same protection');
+      assert.equal(f.service.getSnapshot(), before);
+      assert.deepEqual(f.values(), counters);
+      f[cleanup]();
+      assert.equal(unload(), false);
+      f.grant(); await settle();
+    });
+  }
+});
 });

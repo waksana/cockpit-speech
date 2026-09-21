@@ -1,12 +1,50 @@
 # Cockpit Speech
 
-The current source pairs with Cockpit commit
-`9fd5204bda99a8bd65b2c5ef152cc47ce87837d5` (exported SDK version 0.2.6).
-Recovery UI consumes public `ck-surface` and `ck-actions`; activation requires
+## Parallel UI source preparation (0.9.0)
+
+Speech adds an independent presentation for the host's `/next/` entry; classic
+remains the default. The module declares `frontend.next` with its own entry and
+stylesheet, using the same packaged asset roots and backend. The new entry
+requires `context.ui.version === 1` and uses the host's actual Button, Label,
+Textarea and Alert components. It does not load classic CSS, a React/Radix
+runtime, global reset or host-private source.
+
+The new composer keeps the native editor and send action. Microphone dictation
+only writes a draft; empty-input hold and F8 still send once on normal ready
+release. Inline feedback distinguishes preparation, recording, transcription
+and native submission, with explicit cancel, retained-recording retry and
+copy/insert/discard recovery. Routine announcements are polite; the sample meter
+and elapsed time are outside the live region. Long errors wrap and recovery text
+remains selectable. All recording, draft and submission ownership is shared with
+classic rather than reimplemented.
+
+Both entries request the browser's native leave confirmation while any draft,
+including a hidden draft, owns active capture/processing, retained audio/results
+or uncertain submission state. The handler does not stop, cancel, send or clear
+anything. Cancelling navigation leaves work intact. A permission error without
+retained work, a dismissed notice, or successfully persisted draft-only text does
+not itself request a Speech warning. The browser controls whether it displays a
+confirmation, including user-activation restrictions; this is not persistence or
+a guarantee against mobile process termination. Confirming departure still loses
+page-owned audio and recovery. Nothing transfers or automatically replays between
+classic and next.
+
+Minimum paired host: **Cockpit 0.3.0 with independent new-presentation support**.
+The exact SDK foundation pin is
+`0fa433d99c053df2caf80770f0f8762b9ed7002e` (API/protocol 0.3.0).
+This is a reachable source foundation, not a released-host, completed host-app or
+deployment claim. Older hosts may reject the additive `frontend.next` manifest;
+the retained classic entry does not make this package installable on those hosts.
+Both presentations preserve the existing host-persisted draft encodings.
+Next inherits the host's CSS-based system light/dark preference; it does not
+toggle theme classes or require Tooltip/provider or standalone Separator APIs.
+Necessary status and error text stays visible.
+
+Classic recovery UI consumes public `ck-surface` and `ck-actions`; activation requires
 both `context.uiVersion === 1` and `context.uiSurfaceVersion === 1` before
 registering contributions. Missing/unsupported surface capability is rejected.
-These are unreleased current-source capabilities, not a claim about historical
-0.2.6 assets. Gesture, recovery limits, native input and submission ownership
+These are current-source capabilities, not a claim about historical
+host assets. Gesture, recovery limits, native input and submission ownership
 are unchanged; no private host components or separate React runtime are used.
 
 Standalone, GPL-3.0-only Cockpit dictation using **Azure OpenAI gpt-transcribe,
@@ -15,7 +53,7 @@ The backend only exchanges its resource key for short-lived credentials; it
 never receives audio, context or transcripts. No Entra business authentication,
 speech SDK, postprocessor or settings page is required.
 
-## One-button dictation
+## Classic one-button dictation
 
 The fixed circular microphone follows the actual editor and precedes native
 send, for prompt, ask and plan inputs. File stays on the left and prompt-only.
@@ -114,7 +152,7 @@ Focused or nonempty inputs keep native editing. To paste into an empty unfocused
 input, tap first, then use native long-press paste. Keyboard Tab still focuses
 the real textarea; the gesture layer adds no tab stop. The independent microphone
 button remains the accessible alternative and retains its existing behavior.
-Speech 0.8.4 source preparation requires the paired host's `draftLifecycleVersion: 1` and
+Speech 0.9.0 requires the paired host's `draftLifecycleVersion: 1` and
 `draftSubmissionVersion: 1` capabilities
 as well as Cockpit's additive public UI classes. It uses the
 existing `composerEditor` middleware for the full-width status row and leaves
@@ -361,8 +399,8 @@ not used as a local ownership key. Final text must match the committed item.
 ## Development and package
 
 Requires Node **24.20.0** and pnpm **10.34.5**. The immutable SDK SHA and package
-version are recorded in `tooling/host-sdk.json`. The paired host changes are
-waksana/cockpit#57 and waksana/cockpit#59. Frontend API v2/UI v1,
+version are recorded in `tooling/host-sdk.json`. The parallel UI is coordinated
+with waksana/cockpit#99. Frontend API v2, classic UI v1 or next public components v1,
 `chatWindowVersion: 1`, `composerInputVersion: 1`, `draftLifecycleVersion: 1`
 and `draftSubmissionVersion: 1` are independently required.
 
@@ -373,8 +411,8 @@ pnpm typecheck
 pnpm test
 pnpm build
 # After committing clean source; use a new output directory.
-node scripts/package.mjs module-output-0.8.1
-node scripts/verify-package.mjs module-output-0.8.1/cockpit-speech-0.8.1.tgz
+node scripts/package.mjs module-output-0.9.0
+node scripts/verify-package.mjs module-output-0.9.0/cockpit-speech-0.9.0.tgz
 ```
 
 Archives contain runtime code, worklet assets, licenses and exact source/SDK

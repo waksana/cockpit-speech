@@ -15,8 +15,11 @@ bytes/digest. Source SHAs and digests record provenance, not replacement version
 Synchronize `package.json`, `cockpit.module.json`, any embedded versions and
 applicable lockfile metadata, current-source compatibility and release notes.
 Keep historical release statements intact. The SDK pin changes only for a real
-host-contract requirement; this migration retains the exact supporting host
-`9fd5204bda99a8bd65b2c5ef152cc47ce87837d5` and `uiSurfaceVersion: 1`.
+host-contract requirement. The parallel presentation requires the paired host's
+`ModuleFrontendServices`, `ModuleNextFrontendContext` and public `ModuleUi`;
+use the coordinated reachable clean source SHA, never a dirty local export.
+Classic continues to require `uiVersion: 1` and `uiSurfaceVersion: 1`, while
+next checks `context.ui.version` independently.
 
 Commit the final source, rebuild, package and verify the exact artifact with the
 existing scripts/CI. Never delete installed module directories or force a bypass
