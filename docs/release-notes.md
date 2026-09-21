@@ -1,3 +1,12 @@
+# Cockpit Speech 0.8.4 (source preparation)
+
+Assign a fresh immutable package version to the merged shared-UI changes rather
+than replacing installed 0.8.3 bytes. Manifest and package metadata agree.
+The supporting host pin remains `9fd5204bda99a8bd65b2c5ef152cc47ce87837d5`;
+`uiSurfaceVersion: 1` remains required. No recording, provider, draft or send behavior
+changes. Contributor guidance documents version identity and final-artifact checks.
+This preparation does not create a tag/Release or install/restart production.
+
 # Cockpit Speech 0.8.3 (source preparation)
 
 Asynchronous transcription completion places the owned caret without taking
