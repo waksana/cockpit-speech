@@ -18,10 +18,10 @@ export function composeEditorRef(local: { current: HTMLTextAreaElement | null },
 }
 
 export const activate: ActivateFrontend = context => {
-  if (context.apiVersion !== 2 || context.uiVersion !== 1 || context.chatWindowVersion !== 1
+  if (context.apiVersion !== 2 || context.uiVersion !== 1 || context.uiSurfaceVersion !== 1 || context.chatWindowVersion !== 1
     || context.composerInputVersion !== 1 || context.draftLifecycleVersion !== 1 || context.draftSubmissionVersion !== 1
     || !context.state?.chatWindow || !context.state.bindDraft) {
-    throw new Error('语音模块需要前端 API v2、UI v1、chatWindow v1、composerInput v1、draftLifecycle v1 和 draftSubmission v1，请先升级配套宿主。');
+    throw new Error('语音模块需要前端 API v2、UI v1、uiSurfaceVersion v1、chatWindow v1、composerInput v1、draftLifecycle v1 和 draftSubmission v1，请先升级配套宿主。');
   }
   const React = context.react;
   const h = React.createElement;

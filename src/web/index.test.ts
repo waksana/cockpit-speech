@@ -24,9 +24,9 @@ test('editor refs preserve object refs, callback nulls and React 19 cleanup', ()
   assert.equal(cleaned, 1); assert.equal(local.current, null);
 });
 test('frontend requires additive capabilities rather than assuming them from API v2', () => {
-  for (const patch of [{ chatWindowVersion: undefined }, { composerInputVersion: undefined }, { draftLifecycleVersion: undefined }, { draftSubmissionVersion: undefined }]) {
+  for (const patch of [{ uiSurfaceVersion: undefined }, { uiSurfaceVersion: 0 }, { uiSurfaceVersion: 2 }, { chatWindowVersion: undefined }, { composerInputVersion: undefined }, { draftLifecycleVersion: undefined }, { draftSubmissionVersion: undefined }]) {
     assert.throws(() => activate({
-      apiVersion: 2, uiVersion: 1, chatWindowVersion: 1, composerInputVersion: 1, draftLifecycleVersion: 1, draftSubmissionVersion: 1,
+      apiVersion: 2, uiVersion: 1, uiSurfaceVersion: 1, chatWindowVersion: 1, composerInputVersion: 1, draftLifecycleVersion: 1, draftSubmissionVersion: 1,
       state: { chatWindow: {}, bindDraft() {} }, ...patch,
     } as unknown as ModuleFrontendContext), /配套宿主/);
   }
@@ -65,7 +65,7 @@ test('input middleware preserves native textarea props and keeps decision microp
   const cleanupEffects = () => { for (const cleanup of effects.splice(0).reverse()) cleanup(); };
   const host = { getSnapshot: () => ({ sessionId: 's', visible: true, connected: true }), subscribe: () => () => {} };
   const context = {
-    apiVersion: 2, uiVersion: 1, chatWindowVersion: 1, composerInputVersion: 1, draftLifecycleVersion: 1, draftSubmissionVersion: 1,
+    apiVersion: 2, uiVersion: 1, uiSurfaceVersion: 1, chatWindowVersion: 1, composerInputVersion: 1, draftLifecycleVersion: 1, draftSubmissionVersion: 1,
     signal: new AbortController().signal, request: async () => { throw new Error('No HTTP from render'); }, report() {},
     createPortal: () => assert.fail('recording feedback must stay in normal component flow'),
     react: {
