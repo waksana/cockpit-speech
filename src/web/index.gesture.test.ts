@@ -134,7 +134,8 @@ async function createFixture(t: TestContext, pointerType: 'mouse' | 'touch', pre
   if (input.boundary !== 'composerInput' || status.boundary !== 'composerEditor') assert.fail('missing middleware');
   const Input = input.wrap(() => null) as unknown as (props: ComposerInputProps) => Element;
   const StatusEditor = status.wrap(() => null) as unknown as (props: { draft: ModuleDraft }) => Element;
-  const Status = (StatusEditor({ draft }).children[presentation === 'classic' ? 0 : 1] as Element).type as (props: { id: string }) => Element | null;
+  const statusElement = StatusEditor({ draft }).children[presentation === 'classic' ? 0 : 1] as Element;
+  const Status = statusElement.type as (props: Record<string, unknown>) => Element | null;
   const editor = {
     ...dom.editor(),
     focus() { focuses++; this.ownerDocument.activeElement = this; },
@@ -151,7 +152,7 @@ async function createFixture(t: TestContext, pointerType: 'mouse' | 'touch', pre
     (base.props.editorRef as (node: unknown) => void)(editor);
     for (const effect of effects) effect();
     effects = [];
-    return Status({ id: draft.id });
+    return Status(statusElement.props);
   };
   assert.equal(render(), null);
   assert.equal(render(), null, 'render the target registered by the initial layout effect');

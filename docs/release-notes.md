@@ -6,6 +6,9 @@ React components and its own isolated stylesheet. Recording, pointer/F8 input,
 draft ownership, transcription retry and captured native submission share one
 implementation across both presentations. Next combines phase feedback,
 explicit cancel/retry and selectable recovery in the composer.
+Pending retry keeps its focused action mounted. Removing an owned retry,
+cancel or discard action restores focus to a remaining Speech action in the
+same live composer, without activating text editing or taking focus elsewhere.
 
 Both entries add a non-destructive native `beforeunload` confirmation request for
 actual page-owned Speech work across all drafts, including retained/uncertain

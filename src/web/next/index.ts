@@ -1,6 +1,7 @@
-import type { ActivateNextFrontend } from '@cockpit/module-api';
+import type { ActivateNextFrontend, DraftReference } from '@cockpit/module-api';
 import { createSpeechFrontend } from '../frontend.ts';
 import { icons } from '../icons.ts';
+import { RemovedActionFocus } from './focus.ts';
 
 export const activate: ActivateNextFrontend = context => {
   if (context.ui?.version !== 1 || !context.ui.Button || !context.ui.Label || !context.ui.Textarea
@@ -19,11 +20,22 @@ export const activate: ActivateNextFrontend = context => {
     }, ...icons[name].map(([tag, attrs], key) => h(tag, { ...attrs, key })));
   }
 
-  function Feedback({ id }: { id: string }) {
+  function Feedback({ draft, scope }: { draft: DraftReference; scope: { current: HTMLDivElement | null } }) {
+    const id = draft.id;
     const state = useSpeech(id);
     React.useSyncExternalStore(context.state.host.subscribe, context.state.host.getSnapshot);
     const resultId = React.useId();
-    if (state.phase === 'idle' && !state.recovery && !state.notice) return null;
+    const [retrying, setRetrying] = React.useState(false);
+    const retryRun = React.useRef<object | null>(null);
+    React.useLayoutEffect(() => () => { retryRun.current = null; }, []);
+    const focus = React.useMemo(() => new RemovedActionFocus(() => {
+      const host = context.state.host.getSnapshot();
+      if (!host.connected || !host.visible || host.sessionId !== draft.sessionId || draft.getSnapshot().retired) return null;
+      return scope.current?.querySelector<HTMLButtonElement>('.csp-next-clear')
+        ?? scope.current?.querySelector<HTMLButtonElement>('.csp-next-mic') ?? null;
+    }), [draft, scope]);
+    React.useLayoutEffect(focus.restore);
+    if (state.phase === 'idle' && !state.recovery && !state.notice && !retrying) return null;
     const recording = state.phase === 'recording';
     const retry = state.phase === 'retry';
     const sendError = state.phase === 'send-error';
@@ -71,9 +83,23 @@ export const activate: ActivateNextFrontend = context => {
         ),
       ) : null,
       h('div', { className: 'csp-next-actions' },
-        retry ? h(Button, { type: 'button', variant: 'outline', disabled: !speech.canRetry(id),
-          onClick: () => { void speech.retry(id); } }, speech.hasRetainedRecording(id) ? '重试录音' : '重新录音') : null,
-        h(Button, { type: 'button', variant: active ? 'outline' : 'ghost', onClick: () => speech.clear(id) },
+        retry || retrying ? h(Button, { type: 'button', variant: 'outline', ref: focus.ref,
+          className: 'csp-next-retry', disabled: !retrying && !speech.canRetry(id),
+          'aria-disabled': retrying || !speech.canRetry(id), 'aria-busy': retrying,
+          onClick: () => {
+            if (retrying || !speech.canRetry(id)) return;
+            const run = retryRun.current = {};
+            setRetrying(true);
+            void speech.retry(id).finally(() => {
+              if (retryRun.current === run) { retryRun.current = null; setRetrying(false); }
+            });
+          } }, retrying ? '正在重试录音…' : speech.hasRetainedRecording(id) ? '重试录音' : '重新录音') : null,
+        h(Button, { type: 'button', variant: active ? 'outline' : 'ghost', ref: focus.ref,
+          className: 'csp-next-clear', onClick: () => {
+            retryRun.current = null;
+            setRetrying(false);
+            speech.clear(id);
+          } },
           uncertain ? '清除本地语音' : active ? '取消本次语音' : recovery || retry || sendError ? '丢弃本次语音' : '关闭提示'),
       ),
     );
@@ -111,8 +137,9 @@ export const activate: ActivateNextFrontend = context => {
     }, {
       id: 'speech-feedback', boundary: 'composerEditor',
       wrap: Base => function SpeechEditor(props) {
-        return h('div', { className: 'csp-next-editor' },
-          h(Base, props), h(Feedback, { id: props.draft.id }),
+        const scope = React.useRef<HTMLDivElement | null>(null);
+        return h('div', { className: 'csp-next-editor', ref: scope },
+          h(Base, props), h(Feedback, { key: props.draft.id, draft: props.draft, scope }),
         );
       },
     }],

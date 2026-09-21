@@ -35,6 +35,10 @@ test('next feedback uses host components, explicit recovery actions and polite p
       createElement: (type: unknown, props: Record<string, unknown> | null, ...children: Element['children']): Element =>
         ({ type, props: props ?? {}, children }),
       useId: () => 'recovery-id',
+      useState: () => [false, () => {}],
+      useRef: (current: unknown) => ({ current }),
+      useMemo: (factory: () => unknown) => factory(),
+      useLayoutEffect() {},
       useCallback: (fn: unknown) => fn,
       useSyncExternalStore: (_subscribe: unknown, getSnapshot: () => unknown) => getSnapshot(),
     },
@@ -60,11 +64,12 @@ test('next feedback uses host components, explicit recovery actions and polite p
   const composed = Editor(props);
   assert.equal((composed.children[0] as Element).type, Base);
   assert.equal((composed.children[0] as Element).props, props);
-  const Feedback = (composed.children[1] as Element).type as (props: { id: string }) => Element | null;
+  const feedbackElement = composed.children[1] as Element;
+  const Feedback = feedbackElement.type as (props: Record<string, unknown>) => Element | null;
   let state: SpeechSnapshot = speech.getSnapshot();
   const idle = state;
   t.mock.method(speech, 'getSnapshot', () => state);
-  const render = () => Feedback({ id: 'original' });
+  const render = () => Feedback(feedbackElement.props);
   assert.equal(render(), null);
   const retained = t.mock.method(speech, 'hasRetainedRecording', () => true);
   const retryable = t.mock.method(speech, 'canRetry', () => true);
@@ -151,4 +156,142 @@ test('classic and next keep independent presentation assets without global reset
   assert.equal(manifest.frontend.entry, 'dist/web/index.js');
   assert.deepEqual(manifest.frontend.styles, ['dist/web/styles.css']);
   assert.deepEqual(manifest.frontend.next, { entry: 'dist/web/next/index.js', styles: ['dist/web/next/styles.css'] });
+});
+
+test('retry focus survives pending work; focused retry/cancel/discard removal returns only to the same live composer', async t => {
+  const descriptor = Object.getOwnPropertyDescriptor(globalThis, 'window');
+  Object.defineProperty(globalThis, 'window', { configurable: true, value: new EventTarget() });
+  t.after(() => descriptor ? Object.defineProperty(globalThis, 'window', descriptor) : Reflect.deleteProperty(globalThis, 'window'));
+  const controller = new AbortController();
+  let service!: SpeechService;
+  let retired = false;
+  const host = { sessionId: 's', connected: true, visible: true };
+  const slots: unknown[] = [];
+  let cursor = 0;
+  let effects: (() => void)[] = [];
+  const ref = (current: unknown) => {
+    const index = cursor++;
+    return slots[index] ?? (slots[index] = { current });
+  };
+  const memo = (factory: () => unknown) => {
+    const index = cursor++;
+    return slots[index] ?? (slots[index] = factory());
+  };
+  const context = {
+    apiVersion: 2, chatWindowVersion: 1, composerInputVersion: 1, draftLifecycleVersion: 1, draftSubmissionVersion: 1,
+    ui: { version: 1, Button: 'Button', Label: 'Label', Textarea: 'Textarea', Alert: 'Alert', AlertTitle: 'Title', AlertDescription: 'Description' },
+    signal: controller.signal, request: () => assert.fail('focus must not acquire media or credentials'), report() {},
+    state: {
+      host: { subscribe: () => () => {}, getSnapshot: () => host },
+      chatWindow: { subscribe: () => () => {}, getSnapshot: () => ({ status: 'unavailable', messages: [] }) },
+      bindDraft() {},
+      register: (registration: { create(): SpeechService }) => {
+        service = registration.create(); return { get: () => service };
+      },
+    },
+    react: {
+      createElement: (type: unknown, props: Record<string, unknown> | null, ...children: Element['children']): Element => ({ type, props: props ?? {}, children }),
+      useId: () => 'focus-result', useCallback: (fn: unknown) => fn, useRef: ref, useMemo: memo,
+      useSyncExternalStore: (_subscribe: unknown, snapshot: () => unknown) => snapshot(),
+      useLayoutEffect: (effect: () => void, dependencies?: unknown[]) => { if (!dependencies) effects.push(effect); },
+      useState: (initial: unknown) => {
+        const index = cursor++;
+        if (!(index in slots)) slots[index] = initial;
+        return [slots[index], (next: unknown) => { slots[index] = next; }];
+      },
+    },
+  } as unknown as ModuleNextFrontendContext;
+  const frontend = await activate(context);
+  t.after(() => { controller.abort(); service.dispose(); frontend.dispose?.(); });
+  const middleware = frontend.components![1]!;
+  if (middleware.boundary !== 'composerEditor') assert.fail('wrong boundary');
+  const Editor = middleware.wrap(() => null) as unknown as (props: object) => Element;
+  const draft = { id: 'original', sessionId: 's', getSnapshot: () => ({ retired }) };
+  const tree = Editor({ draft });
+  const child = tree.children[1] as Element;
+  assert.equal(child.props.key, draft.id, 'replacement drafts remount the focus owner instead of redirecting it');
+  const scope = child.props.scope as { current: object | null };
+  const Feedback = child.type as (props: Record<string, unknown>) => Element | null;
+  slots.length = 0;
+  const document = { body: {}, documentElement: {}, activeElement: null as object | null,
+    hasFocus: () => true, visibilityState: 'visible', querySelectorAll: () => [] };
+  let focused = 0;
+  const microphone = {
+    ownerDocument: document, isConnected: true, disabled: false, matches: () => false,
+    closest: () => null, getAttribute: () => null, checkVisibility: () => true, getClientRects: () => [{}],
+    focus() { focused++; document.activeElement = microphone; },
+  };
+  scope.current = { querySelector: (selector: string) => selector === '.csp-next-mic' ? microphone : null };
+  const idle = service.getSnapshot();
+  let state: SpeechSnapshot = { ...idle, phase: 'retry', error: 'Retained synthetic recording' };
+  t.mock.method(service, 'getSnapshot', () => state);
+  t.mock.method(service, 'canRetry', () => state.phase === 'retry');
+  t.mock.method(service, 'hasRetainedRecording', () => true);
+  let resolveRetry!: () => void;
+  let retries = 0;
+  t.mock.method(service, 'retry', () => { retries++; return new Promise<void>(resolve => { resolveRetry = resolve; }); });
+  t.mock.method(service, 'clear', () => { state = idle; });
+  const render = () => { cursor = 0; return Feedback(child.props); };
+  const flush = () => { for (const effect of effects.splice(0)) effect(); };
+  const button = (row: Element, className: string) => all(row).find(element => element.props.className === className)!;
+  const own = (element: Element) => {
+    const node = { ownerDocument: document, isConnected: true };
+    document.activeElement = node;
+    const cleanup = (element.props.ref as (node: object) => () => void)(node);
+    return () => { cleanup(); node.isConnected = false; document.activeElement = document.body; };
+  };
+  let row = render()!; flush();
+  const retry = button(row, 'csp-next-retry');
+  const removeRetry = own(retry);
+  (retry.props.onClick as () => void)();
+  state = { ...state, phase: 'transcribing' };
+  row = render()!; flush();
+  const pending = button(row, 'csp-next-retry');
+  assert.equal(pending.props.ref, retry.props.ref, 'pending state does not detach the focused ref');
+  assert.equal(pending.props.disabled, false, 'native disabling would drop pending focus');
+  assert.equal(pending.props['aria-disabled'], true);
+  assert.equal(pending.props['aria-busy'], true);
+  assert.match(text(pending), /正在重试/);
+  (pending.props.onClick as () => void)();
+  assert.equal(retries, 1, 'focusability does not allow another retry');
+  assert.equal(focused, 0);
+  state = idle; resolveRetry(); await Promise.resolve();
+  assert.equal(render(), null);
+  removeRetry(); flush();
+  assert.equal(focused, 1);
+  assert.equal(document.activeElement, microphone);
+
+  for (const phase of ['recording', 'retry', 'send-error'] as const) {
+    for (const departure of ['none', 'editing', 'session', 'retired', 'disconnected'] as const) {
+      state = { ...idle, phase };
+      row = render()!; flush();
+      const clear = button(row, 'csp-next-clear');
+      const removeClear = own(clear);
+      (clear.props.onClick as () => void)();
+      assert.equal(render(), null);
+      removeClear();
+      const before: number = focused;
+      if (departure === 'editing') document.activeElement = {};
+      if (departure === 'session') host.sessionId = 'other';
+      if (departure === 'retired') retired = true;
+      if (departure === 'disconnected') host.connected = false;
+      flush();
+      assert.equal(focused, before + (departure === 'none' ? 1 : 0), `${phase}: ${departure}`);
+      host.sessionId = 's'; host.connected = true; retired = false;
+    }
+  }
+  state = { ...idle, phase: 'retry' };
+  row = render()!; flush();
+  (button(row, 'csp-next-retry').props.onClick as () => void)();
+  const oldRetry = resolveRetry;
+  row = render()!; flush();
+  (button(row, 'csp-next-clear').props.onClick as () => void)();
+  assert.equal(render(), null); flush();
+  state = { ...idle, phase: 'retry' };
+  row = render()!; flush();
+  (button(row, 'csp-next-retry').props.onClick as () => void)();
+  oldRetry(); await Promise.resolve();
+  row = render()!; flush();
+  assert.equal(button(row, 'csp-next-retry').props['aria-busy'], true, 'late cleared retry cannot release a newer focus owner');
+  resolveRetry(); await Promise.resolve();
 });
