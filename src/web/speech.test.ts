@@ -282,7 +282,7 @@ test('prompt, ask and plan insert at the captured selection only after stop; con
       ? 'Question: Synthetic question?\nChoices:\n- Alpha\n- Beta' : 'initial context');
     assert.equal(f.service.getSnapshot().recovery, null);
     assert.deepEqual(f.service.getSnapshot().focus, {
-      id: f.original.id, revision: f.original.getSnapshot().revision, selection: { start: 12, end: 12 },
+      id: f.original.id, revision: f.original.getSnapshot().revision, selection: { start: 12, end: 12 }, activate: false,
     });
   }
 });
@@ -363,6 +363,7 @@ test('manual revisions win and successful text remains recoverable; explicit ins
   assert.equal(f.original.getSnapshot().text, 'manualrecognized words');
   assert.equal(f.service.getSnapshot().recovery, null);
   assert.deepEqual(f.service.getSnapshot().focus?.selection, { start: 16, end: 16 });
+  assert.equal(f.service.getSnapshot().focus?.activate, true, 'explicit recovery insertion returns to the editor');
 });
 test('a recovered result never redirects to another draft, including reused native request IDs', async t => {
   const f = fixture({ purpose: { kind: 'ask', requestId: 'reused' } }); t.after(() => f.service.dispose());
