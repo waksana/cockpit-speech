@@ -114,7 +114,7 @@ Focused or nonempty inputs keep native editing. To paste into an empty unfocused
 input, tap first, then use native long-press paste. Keyboard Tab still focuses
 the real textarea; the gesture layer adds no tab stop. The independent microphone
 button remains the accessible alternative and retains its existing behavior.
-Speech 0.8.3 source preparation requires the paired host's `draftLifecycleVersion: 1` and
+Speech 0.8.4 source preparation requires the paired host's `draftLifecycleVersion: 1` and
 `draftSubmissionVersion: 1` capabilities
 as well as Cockpit's additive public UI classes. It uses the
 existing `composerEditor` middleware for the full-width status row and leaves
