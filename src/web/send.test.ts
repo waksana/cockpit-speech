@@ -364,6 +364,26 @@ test('blocked and unknown native outcomes retain resources and never become tran
   }
 });
 
+test('hidden sending and unconfirmed results retain unload protection until explicit clear', async t => {
+  const f = fixture(t);
+  await f.service.start('hold');
+  const release = f.service.releaseHold();
+  f.takes[0]!.stop.resolve('recognized'); await turn();
+  assert.equal(f.service.getSnapshot().phase, 'sending');
+  assert.equal(f.service.hasUnpersistedWork(), true);
+  f.select(f.owner('different', 'other-session'));
+  assert.equal(f.service.getSnapshot().phase, 'idle');
+  assert.equal(f.service.hasUnpersistedWork(), true);
+  f.original.reply.resolve({ status: 'unconfirmed', reason: 'native-unconfirmed' }); await release;
+  assert.equal(f.service.getSnapshot('original').sendOutcome, 'unconfirmed');
+  assert.equal(f.original.draft.getSnapshot().blocks.length, 0);
+  assert.equal(f.service.hasUnpersistedWork(), true);
+  assert.equal(f.requests.length, 1);
+  f.service.clear('original');
+  assert.equal(f.service.hasUnpersistedWork(), false);
+  assert.equal(f.requests.length, 1);
+});
+
 test('empty recognition never sends even existing attachments; too-short and cleared tasks also never send', async t => {
   for (const outcome of ['empty', 'short', 'clear', 'retire', 'denied'] as const) {
     const f = fixture(t);
