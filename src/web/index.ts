@@ -103,7 +103,7 @@ export const activate: ActivateFrontend = context => {
           h('button', { type: 'button', className: 'ck-button', disabled: !speech.canInsert(id), onClick: () => speech.insertRecovery(id) }, '插入原输入框光标处'),
         ),
       ) : null,
-      !active ? h('button', { type: 'button', className: 'ck-button', onClick: () => { speech.dismiss(id); speech.focusTarget(undefined, id); } }, recovery ? '丢弃识别结果' : '关闭提示') : null,
+      !active ? h('button', { type: 'button', className: 'ck-button', onClick: () => speech.dismiss(id) }, recovery ? '丢弃识别结果' : '关闭提示') : null,
     ) : null;
   }
   return {
@@ -192,7 +192,7 @@ export const activate: ActivateFrontend = context => {
         React.useLayoutEffect(() => {
           const focus = state.focus;
           if (!focus || focus.id !== draft.id || focus.revision !== snapshot.revision || props.disabled) return;
-          input.current?.focus();
+          if (focus.activate) input.current?.focus();
           input.current?.setSelectionRange(focus.selection.start, focus.selection.end);
         }, [state.focus, draft.id, snapshot.revision, props.disabled]);
         const retry = state.phase === 'retry';

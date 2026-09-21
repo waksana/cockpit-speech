@@ -177,6 +177,13 @@ Before the hold threshold, no recording status row or live announcement is
 mounted and no audio starts. Preparation feedback follows the actual `permission`
 phase. Short-tap focus still uses the completed click.
 
+Ordinary asynchronous transcription completion updates the owned caret selection
+without focusing the textarea or opening the mobile keyboard. Dismissing recovery
+also does not focus the editor. The two DOM focus paths are limited to a completed
+short tap on the hold layer and explicit recovery insertion into the original
+editor. The latter returns to the inserted text; neither path runs at recording
+start. F8 retains its existing no-completion-selection/focus policy.
+
 `keyboard.ts` provides one activation-scoped capture-phase listener set and
 physical F8 latch across composer registration/replacement. Capture phase keeps
 ordinary controls' bubbling handlers from hiding keydown/keyup. It checks the

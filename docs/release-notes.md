@@ -1,3 +1,13 @@
+# Cockpit Speech 0.8.3 (source preparation)
+
+Asynchronous transcription completion places the owned caret without taking
+editor focus or opening the mobile keyboard. Dismissing recovery no longer
+focuses the editor. A completed short tap and explicit recovery insertion retain
+their intentional editor activation. F8, recording/submission and draft ownership
+semantics are unchanged; no focus-visible mode tracker or outline suppression is
+introduced. Public capabilities and exact host SDK pin remain unchanged.
+This is not a tag, publication, deployment or actual microphone/provider test.
+
 # Cockpit Speech 0.8.2
 
 For #27, make F8 genuinely page-wide: blank space, sidebar, buttons, other

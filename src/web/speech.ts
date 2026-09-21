@@ -18,7 +18,7 @@ export interface SpeechSnapshot {
   error: string | null;
   notice: string | null;
   recovery: Recovery | null;
-  focus: { id: string; revision: number; selection: Selection } | null;
+  focus: { id: string; revision: number; selection: Selection; activate: boolean } | null;
 }
 interface Operation {
   identity: Identity; draft: ModuleDraft; revision: number; selection: Selection; text: string;
@@ -112,10 +112,11 @@ export class SpeechService {
     }
     this.notify();
   }
-  focusTarget(selection?: Selection, id = this.target?.draft.id): void {
+  focusTarget(selection?: Selection, id = this.target?.draft.id, activate = true): void {
     const target = this.target;
     if (!target || target.draft.id !== id || target.disabled || !this.hostReady(target.draft.sessionId)) return;
-    this.view = { ...idle, focus: { id: target.draft.id, revision: target.draft.getSnapshot().revision, selection: selection ?? target.selection() } };
+    this.view = { ...idle, focus: { id: target.draft.id, revision: target.draft.getSnapshot().revision,
+      selection: selection ?? target.selection(), activate } };
     this.notify();
   }
   canStart(id = this.target?.draft.id): boolean {
@@ -308,7 +309,7 @@ export class SpeechService {
         this.finish(operation);
         if (text && operation.focusOnCompletion) {
           const caret = Math.max(0, Math.min(operation.text.length, operation.selection.start)) + text.length;
-          this.focusTarget({ start: caret, end: caret }, operation.identity.id);
+          this.focusTarget({ start: caret, end: caret }, operation.identity.id, false);
         } else if (!text && this.target?.draft.id === operation.identity.id) {
           this.view = { ...idle, notice: '未识别到语音，草稿未被替换。' };
         }
