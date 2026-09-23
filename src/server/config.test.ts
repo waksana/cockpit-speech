@@ -3,7 +3,7 @@ import { test } from 'node:test';
 import { mkdir, rm, symlink, writeFile } from 'node:fs/promises';
 import { randomUUID } from 'node:crypto';
 import { join, resolve } from 'node:path';
-import { parseConfig, readConfig } from './config.ts';
+import { parseConfig, readConfig, WSL2_GUIDE_URL } from './config.ts';
 
 const config = { endpoint: 'https://synthetic-resource.openai.azure.com/', key: 'synthetic-test-key-not-valid', deployment: 'gpt-transcribe' };
 test('config accepts only exact fields and a public Azure resource origin', () => {
@@ -46,4 +46,26 @@ test('config is reread, bounded, non-symlink and never exposes its bytes on erro
     await mkdir(path);
     await assert.rejects(readConfig(root), { code: 'CONFIG_UNAVAILABLE' });
   } finally { await rm(root, { recursive: true, force: true }); }
+});
+test('non-Linux platforms refuse config reads instead of opening without O_NOFOLLOW', async () => {
+  const root = resolve('.test-work', randomUUID());
+  await mkdir(root, { recursive: true });
+  const original = Object.getOwnPropertyDescriptor(process, 'platform')!;
+  try {
+    await writeFile(join(root, 'azure-openai.json'), JSON.stringify(config), { mode: 0o600 });
+    for (const platform of ['win32', 'darwin'] as const) {
+      Object.defineProperty(process, 'platform', { ...original, value: platform });
+      await assert.rejects(readConfig(root), error => {
+        assert.ok(error instanceof Error && 'code' in error && error.code === 'UNSUPPORTED_PLATFORM');
+        assert.equal(error.message, `语音模块需要 Linux（当前平台：${platform}）。Windows 请在 WSL2 中运行 Cockpit：${WSL2_GUIDE_URL}`);
+        assert.doesNotMatch(error.message, /synthetic-test-key/);
+        return true;
+      });
+    }
+    Object.defineProperty(process, 'platform', original);
+    assert.equal((await readConfig(root)).key, config.key);
+  } finally {
+    Object.defineProperty(process, 'platform', original);
+    await rm(root, { recursive: true, force: true });
+  }
 });

@@ -5,6 +5,12 @@ import { isRecord, SpeechError } from '../shared/limits.ts';
 
 export interface AzureConfig { endpoint: string; key: string; deployment: string }
 const MAX_CONFIG_BYTES = 16 * 1024;
+export const WSL2_GUIDE_URL = 'https://github.com/waksana/cockpit/blob/main/docs/install.md#windows-wsl2';
+
+export function unsupportedPlatformMessage(platform: string): string {
+  return `语音模块需要 Linux（当前平台：${platform}）。Windows 请在 WSL2 中运行 Cockpit：${WSL2_GUIDE_URL}`;
+}
+
 const guidance = '请在语音模块数据目录中创建或更新 azure-openai.json，仅填写字符串字段 endpoint、key 和 gpt-transcribe 的 deployment 部署名。';
 
 export function parseConfig(value: unknown): AzureConfig {
@@ -23,6 +29,8 @@ export function parseConfig(value: unknown): AzureConfig {
 }
 
 export async function readConfig(dataRoot: string): Promise<AzureConfig> {
+  // libuv defines O_NOFOLLOW as 0 outside POSIX, so refuse rather than read without symlink protection.
+  if (process.platform !== 'linux') throw new SpeechError('UNSUPPORTED_PLATFORM', unsupportedPlatformMessage(process.platform), 503);
   let handle: Awaited<ReturnType<typeof open>> | undefined;
   try {
     const path = join(dataRoot, 'azure-openai.json');
