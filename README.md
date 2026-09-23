@@ -206,6 +206,10 @@ drivers, change the system default microphone or prove all physical devices work
 
 ## File-only configuration
 
+Configuration reads require Linux: on other platforms `O_NOFOLLOW` is unavailable,
+so requests fail with `UNSUPPORTED_PLATFORM` instead of reading without symlink
+protection. On Windows, run Cockpit inside [WSL2](https://github.com/waksana/cockpit/blob/main/docs/install.md#windows-wsl2).
+
 Create **`<dataRoot>/azure-openai.json`**, outside the immutable module install.
 The host supplies dataRoot; the default is:
 
