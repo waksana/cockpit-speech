@@ -1,3 +1,13 @@
+# Unreleased (source only)
+
+Removed the `/next/` presentation (#37, host tracking waksana/cockpit#136): the
+manifest no longer declares `frontend.next`, and the next entry, stylesheet,
+focus helper, tests and build step are gone. Packaging now rejects a manifest
+that declares `frontend.next`. The classic entry, backend transcription,
+configuration, draft ownership, native submission and `beforeunload` protection
+are unchanged; the SDK pin stays `0fa433d99c053df2caf80770f0f8762b9ed7002e`.
+No version, tag, release or deployment is part of this change.
+
 # Cockpit Speech 0.9.0 (source preparation)
 
 Proposed additive release for an independent shadcn presentation alongside the

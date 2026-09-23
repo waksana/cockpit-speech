@@ -1,24 +1,14 @@
 # Cockpit Speech
 
-## Parallel UI source preparation (0.9.0)
+## Classic-only presentation
 
-Speech adds an independent presentation for the host's `/next/` entry; classic
-remains the default. The module declares `frontend.next` with its own entry and
-stylesheet, using the same packaged asset roots and backend. The new entry
-requires `context.ui.version === 1` and uses the host's actual Button, Label,
-Textarea and Alert components. It does not load classic CSS, a React/Radix
-runtime, global reset or host-private source.
+Speech provides only the classic frontend entry (`frontend.entry`). The former
+`/next/` presentation and its `frontend.next` manifest declaration were removed
+(waksana/cockpit-speech#37, host tracking waksana/cockpit#136). The manifest does
+not declare `frontend.next`, so the classic entry activates on hosts that still
+accept the optional legacy field and on hosts that no longer know it.
 
-The new composer keeps the native editor and send action. Microphone dictation
-only writes a draft; empty-input hold and F8 still send once on normal ready
-release. Inline feedback distinguishes preparation, recording, transcription
-and native submission, with explicit cancel, retained-recording retry and
-copy/insert/discard recovery. Routine announcements are polite; the sample meter
-and elapsed time are outside the live region. Long errors wrap and recovery text
-remains selectable. All recording, draft and submission ownership is shared with
-classic rather than reimplemented.
-
-Both entries request the browser's native leave confirmation while any draft,
+The classic entry requests the browser's native leave confirmation while any draft,
 including a hidden draft, owns active capture/processing, retained audio/results
 or uncertain submission state. The handler does not stop, cancel, send or clear
 anything. Cancelling navigation leaves work intact. A permission error without
@@ -26,19 +16,12 @@ retained work, a dismissed notice, or successfully persisted draft-only text doe
 not itself request a Speech warning. The browser controls whether it displays a
 confirmation, including user-activation restrictions; this is not persistence or
 a guarantee against mobile process termination. Confirming departure still loses
-page-owned audio and recovery. Nothing transfers or automatically replays between
-classic and next.
+page-owned audio and recovery.
 
-Minimum paired host: **Cockpit 0.3.0 with independent new-presentation support**.
-The exact SDK foundation pin is
+Minimum paired host: **Cockpit 0.3.0**. The exact SDK foundation pin is
 `0fa433d99c053df2caf80770f0f8762b9ed7002e` (API/protocol 0.3.0).
 This is a reachable source foundation, not a released-host, completed host-app or
-deployment claim. Older hosts may reject the additive `frontend.next` manifest;
-the retained classic entry does not make this package installable on those hosts.
-Both presentations preserve the existing host-persisted draft encodings.
-Next inherits the host's CSS-based system light/dark preference; it does not
-toggle theme classes or require Tooltip/provider or standalone Separator APIs.
-Necessary status and error text stays visible.
+deployment claim. The existing host-persisted draft encodings are preserved.
 
 Classic recovery UI consumes public `ck-surface` and `ck-actions`; activation requires
 both `context.uiVersion === 1` and `context.uiSurfaceVersion === 1` before
@@ -399,8 +382,7 @@ not used as a local ownership key. Final text must match the committed item.
 ## Development and package
 
 Requires Node **24.20.0** and pnpm **10.34.5**. The immutable SDK SHA and package
-version are recorded in `tooling/host-sdk.json`. The parallel UI is coordinated
-with waksana/cockpit#99. Frontend API v2, classic UI v1 or next public components v1,
+version are recorded in `tooling/host-sdk.json`. Frontend API v2, classic UI v1,
 `chatWindowVersion: 1`, `composerInputVersion: 1`, `draftLifecycleVersion: 1`
 and `draftSubmissionVersion: 1` are independently required.
 
