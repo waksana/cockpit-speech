@@ -1,3 +1,14 @@
+# Cockpit Speech 0.9.1 (source preparation)
+
+Assigns a fresh immutable package version for the joint 2026-09-24 deployment
+without runtime behavior changes. Manifest and package metadata agree at 0.9.1;
+the packaged manifest continues to declare the current frontend entry/styles/assets
+and no `frontend.next`. The SDK foundation pin remains
+`0fa433d99c053df2caf80770f0f8762b9ed7002e`, API/protocol 0.3.0.
+
+No tag, Release, installation, deployment or restart is performed by this source
+change.
+
 # Cockpit Speech 0.9.0 (source preparation)
 
 Adds a non-destructive native `beforeunload` confirmation request for actual
