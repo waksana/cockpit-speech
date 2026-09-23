@@ -4,8 +4,8 @@
 
 `frontend.ts` owns activation, the `SpeechService` registration, F8 listener
 lifetime, editor refs, target binding, pointer gestures and focus effects.
-It accepts `ModuleFrontendServices`. `index.ts` keeps the UI capability guard
-and rendering over the capture/PCM/transport/transcript/draft/send logic.
+`index.ts` checks the host capabilities before calling it and renders over the
+capture/PCM/transport/transcript/draft/send logic.
 
 Activation installs one `beforeunload` listener. Its synchronous
 `SpeechService.hasUnpersistedWork()` query inspects all operation owners, not only

@@ -1,4 +1,4 @@
-import type { ComposerInputProps, ModuleFrontendServices } from '@cockpit/module-api';
+import type { ComposerInputProps, ModuleFrontendContext } from '@cockpit/module-api';
 import type { HTMLAttributes, Ref } from 'react';
 import { HoldGesture } from './hold.ts';
 import { KeyboardHold } from './keyboard.ts';
@@ -27,12 +27,7 @@ export function protectSpeechUnload(speech: SpeechService, target: EventTarget):
   return () => target.removeEventListener('beforeunload', beforeUnload);
 }
 
-export function createSpeechFrontend(context: ModuleFrontendServices) {
-  if (context.apiVersion !== 2 || context.chatWindowVersion !== 1 || context.composerInputVersion !== 1
-    || context.draftLifecycleVersion !== 1 || context.draftSubmissionVersion !== 1
-    || !context.state?.chatWindow || !context.state.bindDraft) {
-    throw new Error('语音模块需要前端 API v2、chatWindow v1、composerInput v1、draftLifecycle v1 和 draftSubmission v1，请先升级配套宿主。');
-  }
+export function createSpeechFrontend(context: ModuleFrontendContext) {
   const React = context.react;
   const speech = context.state.register({
     id: 'speech',
