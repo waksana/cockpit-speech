@@ -46,23 +46,15 @@ test('module packaging rejects linked files, tests and version drift', async t =
   await assert.rejects(packageModule(f.root, f.output), /version must agree/);
 });
 
-test('parallel presentation packaging requires both next assets and preserves classic entry', async t => {
+test('packaging rejects a legacy next presentation declaration', async t => {
   const f = await fixture(t);
   const path = join(f.root, 'cockpit.module.json');
   const manifest = JSON.parse(await readFile(path, 'utf8'));
-  manifest.frontend.next = { entry: 'dist/next.js', styles: ['dist/next.css'] };
+  manifest.frontend.next = { entry: 'dist/web.js' };
   await writeFile(path, JSON.stringify(manifest));
-  await assert.rejects(packageModule(f.root, f.output), { code: 'ENOENT' });
-  await writeFile(join(f.root, 'dist/next.js'), 'Synthetic next presentation');
-  await assert.rejects(packageModule(f.root, f.output), { code: 'ENOENT' });
-  await writeFile(join(f.root, 'dist/next.css'), '.synthetic-next {}');
   commitFixture(f.root);
   await f.receipt();
-  const archive = await packageModule(f.root, f.output);
-  const packaged = JSON.parse(execFileSync('tar', ['-xOzf', archive, 'cockpit.module.json'], { encoding: 'utf8' }));
-  assert.equal(packaged.frontend.entry, 'dist/web.js');
-  assert.deepEqual(packaged.frontend.next, manifest.frontend.next);
-  await verifyPackage(f.root, archive);
+  await assert.rejects(packageModule(f.root, f.output), /next presentation is no longer supported/);
 });
 
 test('packaging rejects dirty source, stale builds, SDK changes and tampered dist', async t => {
