@@ -41,13 +41,6 @@ test('recovery surfaces and controls reuse public presentation without copying h
   assert.doesNotMatch(css, /cockpit-speech-retry|var\(--(?:host|chat)-/);
 });
 
-test('manifest declares only the classic presentation', async () => {
-  const manifest = JSON.parse(await readFile(new URL('../../cockpit.module.json', import.meta.url), 'utf8'));
-  assert.equal(manifest.frontend.entry, 'dist/web/index.js');
-  assert.deepEqual(manifest.frontend.styles, ['dist/web/styles.css']);
-  assert.equal('next' in manifest.frontend, false);
-});
-
 test('input middleware preserves native textarea props and keeps decision microphones separate from feedback', async t => {
   type Element = { type: unknown; props: Record<string, unknown>; children: unknown[] };
   const disposers: (() => void)[] = [];

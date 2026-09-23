@@ -1,14 +1,15 @@
 # Cockpit Speech
 
-## Classic-only presentation
+The current source pairs with Cockpit commit
+`0fa433d99c053df2caf80770f0f8762b9ed7002e` (exported SDK version 0.3.0).
+Recovery UI consumes public `ck-surface` and `ck-actions`; activation requires
+both `context.uiVersion === 1` and `context.uiSurfaceVersion === 1` before
+registering contributions. Missing/unsupported surface capability is rejected.
+These are current-source capabilities, not a claim about historical
+host assets. Gesture, recovery limits, native input and submission ownership
+are unchanged; no private host components or separate React runtime are used.
 
-Speech provides only the classic frontend entry (`frontend.entry`). The former
-`/next/` presentation and its `frontend.next` manifest declaration were removed
-(waksana/cockpit-speech#37, host tracking waksana/cockpit#136). The manifest does
-not declare `frontend.next`, so the classic entry activates on hosts that still
-accept the optional legacy field and on hosts that no longer know it.
-
-The classic entry requests the browser's native leave confirmation while any draft,
+Speech requests the browser's native leave confirmation while any draft,
 including a hidden draft, owns active capture/processing, retained audio/results
 or uncertain submission state. The handler does not stop, cancel, send or clear
 anything. Cancelling navigation leaves work intact. A permission error without
@@ -16,19 +17,7 @@ retained work, a dismissed notice, or successfully persisted draft-only text doe
 not itself request a Speech warning. The browser controls whether it displays a
 confirmation, including user-activation restrictions; this is not persistence or
 a guarantee against mobile process termination. Confirming departure still loses
-page-owned audio and recovery.
-
-Minimum paired host: **Cockpit 0.3.0**. The exact SDK foundation pin is
-`0fa433d99c053df2caf80770f0f8762b9ed7002e` (API/protocol 0.3.0).
-This is a reachable source foundation, not a released-host, completed host-app or
-deployment claim. The existing host-persisted draft encodings are preserved.
-
-Classic recovery UI consumes public `ck-surface` and `ck-actions`; activation requires
-both `context.uiVersion === 1` and `context.uiSurfaceVersion === 1` before
-registering contributions. Missing/unsupported surface capability is rejected.
-These are current-source capabilities, not a claim about historical
-host assets. Gesture, recovery limits, native input and submission ownership
-are unchanged; no private host components or separate React runtime are used.
+page-owned audio and recovery. Existing host-persisted draft encodings are preserved.
 
 Standalone, GPL-3.0-only Cockpit dictation using **Azure OpenAI gpt-transcribe,
 browser-direct WebSocket, local audio buffering and captured chat context**.
@@ -36,7 +25,7 @@ The backend only exchanges its resource key for short-lived credentials; it
 never receives audio, context or transcripts. No Entra business authentication,
 speech SDK, postprocessor or settings page is required.
 
-## Classic one-button dictation
+## One-button dictation
 
 The fixed circular microphone follows the actual editor and precedes native
 send, for prompt, ask and plan inputs. File stays on the left and prompt-only.
@@ -382,7 +371,7 @@ not used as a local ownership key. Final text must match the committed item.
 ## Development and package
 
 Requires Node **24.20.0** and pnpm **10.34.5**. The immutable SDK SHA and package
-version are recorded in `tooling/host-sdk.json`. Frontend API v2, classic UI v1,
+version are recorded in `tooling/host-sdk.json`. Frontend API v2/UI v1,
 `chatWindowVersion: 1`, `composerInputVersion: 1`, `draftLifecycleVersion: 1`
 and `draftSubmissionVersion: 1` are independently required.
 
