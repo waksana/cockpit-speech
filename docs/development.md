@@ -4,11 +4,8 @@
 
 `frontend.ts` owns activation, the `SpeechService` registration, F8 listener
 lifetime, editor refs, target binding, pointer gestures and focus effects.
-It accepts `ModuleFrontendServices` and does not import the presentation.
-`index.ts` is the only frontend entry: it keeps the UI capability guard and
-classic rendering over the shared capture/PCM/transport/transcript/draft/send
-logic. The former `/next/` presentation was removed (#37); the manifest must not
-declare `frontend.next` and packaging rejects it.
+`index.ts` checks the host capabilities before calling it and renders over the
+capture/PCM/transport/transcript/draft/send logic.
 
 Activation installs one `beforeunload` listener. Its synchronous
 `SpeechService.hasUnpersistedWork()` query inspects all operation owners, not only
@@ -20,7 +17,7 @@ never mutates an operation. Abort/disposal removes it. Actual page departure
 retains existing teardown semantics: no audio transfer, persistence, automatic
 replay or guaranteed delivery is introduced.
 
-The Node gesture suite exercises the classic entry with permission, pointer,
+The Node gesture suite exercises the entry with permission, pointer,
 keyboard and focus fixtures; service cases cover hidden-draft unload protection
 after blocker release.
 
@@ -283,9 +280,7 @@ Run `pnpm typecheck`, `pnpm test`, then `pnpm build`. Packaging requires a fresh
 build from clean committed source; use a new output directory and the existing
 package verifier. The precise host pin is in `tooling/host-sdk.json`: reachable foundation
 `0fa433d99c053df2caf80770f0f8762b9ed7002e`, API/protocol 0.3.0. This package requires
-Cockpit 0.3.0 and declares only the classic entry, so hosts with or without legacy
-`frontend.next` support load the same classic entry. Existing persisted draft
-encodings are preserved. The foundation does not establish
+Cockpit 0.3.0. Existing persisted draft encodings are preserved. The foundation does not establish
 completion or deployment of the final host application.
 
 The paired host regression imports the actual compiled middleware:

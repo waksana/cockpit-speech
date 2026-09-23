@@ -46,17 +46,6 @@ test('module packaging rejects linked files, tests and version drift', async t =
   await assert.rejects(packageModule(f.root, f.output), /version must agree/);
 });
 
-test('packaging rejects a legacy next presentation declaration', async t => {
-  const f = await fixture(t);
-  const path = join(f.root, 'cockpit.module.json');
-  const manifest = JSON.parse(await readFile(path, 'utf8'));
-  manifest.frontend.next = { entry: 'dist/web.js' };
-  await writeFile(path, JSON.stringify(manifest));
-  commitFixture(f.root);
-  await f.receipt();
-  await assert.rejects(packageModule(f.root, f.output), /next presentation is no longer supported/);
-});
-
 test('packaging rejects dirty source, stale builds, SDK changes and tampered dist', async t => {
   const f = await fixture(t);
   await writeFile(join(f.root, 'private-fixture.txt'), 'Changed source');

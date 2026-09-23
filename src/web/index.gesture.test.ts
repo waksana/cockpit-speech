@@ -9,7 +9,7 @@ import { keyboardDOM } from './keyboard.fixture.test.ts';
 type Element = { type: unknown; props: Record<string, unknown>; children: (Element | string | null)[] };
 const settle = () => new Promise<void>(resolve => setImmediate(resolve));
 
-async function createFixture(t: TestContext, pointerType: 'mouse' | 'touch') {
+async function fixture(t: TestContext, pointerType: 'mouse' | 'touch') {
   t.mock.timers.enable({ apis: ['setTimeout'] });
   let captures = 0, contexts = 0, requests = 0, trackStops = 0, focuses = 0, leases = 0, intents = 0;
   let grant!: (stream: unknown) => void;
@@ -71,8 +71,6 @@ async function createFixture(t: TestContext, pointerType: 'mouse' | 'touch') {
   const context = {
     apiVersion: 2, uiVersion: 1, uiSurfaceVersion: 1, chatWindowVersion: 1, composerInputVersion: 1, draftLifecycleVersion: 1, draftSubmissionVersion: 1,
     signal: controller.signal,
-    ui: { version: 1, Button: 'Button', Label: 'Label', Textarea: 'Textarea',
-      Alert: 'Alert', AlertTitle: 'AlertTitle', AlertDescription: 'AlertDescription' },
     request: (_path: string, init: RequestInit) => {
       requests++;
       return new Promise<Response>((_resolve, reject) => {
@@ -85,7 +83,6 @@ async function createFixture(t: TestContext, pointerType: 'mouse' | 'touch') {
       createElement: (type: unknown, props: Record<string, unknown> | null, ...children: Element['children']): Element =>
         ({ type, props: props ?? {}, children }),
       useRef: (value: unknown) => memo(() => ({ current: value }), []),
-      useId: () => 'speech-result',
       useState: (initial: unknown) => {
         const { slot, update } = changed([]);
         if (update) slot.value = initial;
@@ -133,8 +130,7 @@ async function createFixture(t: TestContext, pointerType: 'mouse' | 'touch') {
   if (input.boundary !== 'composerInput' || status.boundary !== 'composerEditor') assert.fail('missing middleware');
   const Input = input.wrap(() => null) as unknown as (props: ComposerInputProps) => Element;
   const StatusEditor = status.wrap(() => null) as unknown as (props: { draft: ModuleDraft }) => Element;
-  const statusElement = StatusEditor({ draft }).children[0] as Element;
-  const Status = statusElement.type as (props: Record<string, unknown>) => Element | null;
+  const Status = (StatusEditor({ draft }).children[0] as Element).type as (props: { id: string }) => Element | null;
   const editor = {
     ...dom.editor(),
     focus() { focuses++; this.ownerDocument.activeElement = this; },
@@ -151,7 +147,7 @@ async function createFixture(t: TestContext, pointerType: 'mouse' | 'touch') {
     (base.props.editorRef as (node: unknown) => void)(editor);
     for (const effect of effects) effect();
     effects = [];
-    return Status(statusElement.props);
+    return Status({ id: draft.id });
   };
   assert.equal(render(), null);
   assert.equal(render(), null, 'render the target registered by the initial layout effect');
@@ -181,21 +177,6 @@ async function createFixture(t: TestContext, pointerType: 'mouse' | 'touch') {
   };
 }
 
-function text(element: Element | string | null): string {
-  return element === null ? '' : typeof element === 'string' ? element : element.children.map(text).join('');
-}
-function clearButton(element: Element): Element | undefined {
-  if (typeof element.props.onClick === 'function'
-    && (element.props['aria-label'] === '清除本次语音' || text(element) === '取消本次语音')) return element;
-  for (const child of element.children) {
-    if (child && typeof child !== 'string') {
-      const found = clearButton(child);
-      if (found) return found;
-    }
-  }
-}
-const fixture = createFixture;
-
 for (const pointerType of ['mouse', 'touch'] as const) {
   test(`${pointerType}: short press stays internal through down, threshold wait, release and click`, async t => {
     const f = await fixture(t, pointerType);
@@ -219,16 +200,16 @@ for (const pointerType of ['mouse', 'touch'] as const) {
     f.event('onPointerDown');
     t.mock.timers.tick(HOLD_DELAY);
     assert.equal(f.service.getSnapshot().phase, 'permission');
-    assert.match(text(f.render()), /正在准备录音|正在准备麦克风/);
+    assert.equal((f.render()!.children[1] as Element).children[0], '正在准备录音…');
     assert.equal(f.values().captures, 1);
     assert.equal(f.values().contexts, 1);
     assert.equal(f.values().requests, 1);
     f.grant(); await settle();
     assert.equal(f.service.getSnapshot().phase, 'recording');
-    assert.match(text(f.render()), /正在录音/);
+    assert.equal((f.render()!.children[1] as Element).children[0], '正在录音');
     f.event('onPointerUp');
     assert.equal(f.service.getSnapshot().phase, 'stopping');
-    assert.match(text(f.render()), /正在处理录音|正在收取录音尾部/);
+    assert.equal((f.render()!.children[1] as Element).children[0], '正在处理录音…');
     assert.equal(f.values().intents, 1, 'only active release captures the original draft send intent');
     assert.equal(f.values().trackStops, 1);
     f.event('onClick');
@@ -270,12 +251,12 @@ for (const pointerType of ['mouse', 'touch'] as const) {
 test('microphone button still starts permission immediately without a pending hold', async t => {
   const f = await fixture(t, 'mouse');
   const row = f.clickMic()!;
-  assert.match(text(row), /正在准备录音|正在准备麦克风/);
+  assert.equal((row.children[1] as Element).children[0], '正在准备录音…');
   assert.equal(f.service.getSnapshot().phase, 'permission');
   assert.equal(f.values().captures, 1);
   assert.equal(f.holding(), false);
   assert.equal(f.values().intents, 0);
-  (clearButton(row)!.props.onClick as () => void)();
+  ((row.children[3] as Element).props.onClick as () => void)();
   f.grant(); await settle();
   assert.equal(f.render(), null);
   assert.equal(f.values().trackStops, 1);
@@ -337,7 +318,6 @@ test('F8 and pending/active pointer gestures cannot take over each other or butt
       if (entry === 'pointer-pending') f.event('onPointerCancel');
       f.service.clear(); f.grant(); await settle();
     });
-
   }
 });
 test('activation unload protection is non-destructive and removed on disposal or abort', async t => {

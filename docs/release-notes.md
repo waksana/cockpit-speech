@@ -1,36 +1,18 @@
-# Unreleased (source only)
-
-Removed the `/next/` presentation (#37, host tracking waksana/cockpit#136): the
-manifest no longer declares `frontend.next`, and the next entry, stylesheet,
-focus helper, tests and build step are gone. Packaging now rejects a manifest
-that declares `frontend.next`. The classic entry, backend transcription,
-configuration, draft ownership, native submission and `beforeunload` protection
-are unchanged; the SDK pin stays `0fa433d99c053df2caf80770f0f8762b9ed7002e`.
-No version, tag, release or deployment is part of this change.
-
 # Cockpit Speech 0.9.0 (source preparation)
 
-Proposed additive release for an independent shadcn presentation alongside the
-unchanged default classic UI. The new `frontend.next` entry uses actual host
-React components and its own isolated stylesheet. Recording, pointer/F8 input,
-draft ownership, transcription retry and captured native submission share one
-implementation across both presentations. Next combines phase feedback,
-explicit cancel/retry and selectable recovery in the composer.
-Pending retry keeps its focused action mounted. Removing an owned retry,
-cancel or discard action restores focus to a remaining Speech action in the
-same live composer, without activating text editing or taking focus elsewhere.
+Adds a non-destructive native `beforeunload` confirmation request for actual
+page-owned Speech work across all drafts, including retained/uncertain results
+without a current blocker. No persistence, cross-page transfer or replay is
+promised; browser confirmation may be suppressed by browser lifecycle rules.
+Activation, service registration, input wiring and guarded recovery copy move
+into a shared `frontend.ts`; recording, pointer/F8 input, draft ownership,
+transcription retry and captured native submission are otherwise unchanged.
 
-Both entries add a non-destructive native `beforeunload` confirmation request for
-actual page-owned Speech work across all drafts, including retained/uncertain
-results without a current blocker. No persistence, cross-page transfer or replay
-is promised; browser confirmation may be suppressed by browser lifecycle rules.
-
-The next-capable SDK foundation pin is
-`0fa433d99c053df2caf80770f0f8762b9ed7002e`, API/protocol 0.3.0. Minimum paired host
-is Cockpit 0.3.0 with independent new-presentation support; older hosts may reject
-`frontend.next`. Both presentations retain existing persisted draft encodings.
-The foundation pin is not a released-host or completed host-app claim.
-This preparation is not a committed release artifact, tag, merge or deployment.
+The SDK foundation pin is `0fa433d99c053df2caf80770f0f8762b9ed7002e`,
+API/protocol 0.3.0. Minimum paired host is Cockpit 0.3.0. Existing persisted draft
+encodings are retained. The foundation pin is not a released-host or completed
+host-app claim. This preparation is not a committed release artifact, tag, merge
+or deployment.
 
 # Cockpit Speech 0.8.4 (source preparation)
 

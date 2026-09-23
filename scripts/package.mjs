@@ -23,7 +23,6 @@ export async function packageModule(root, output) {
   if (!/^[a-z0-9][a-z0-9._-]*$/.test(manifest.id)
     || !/^\d+\.\d+\.\d+(?:-[a-zA-Z0-9.-]+)?$/.test(manifest.version)
     || metadata.version !== manifest.version) throw new Error('Module identity and package version must agree');
-  if (manifest.frontend?.next !== undefined) throw new Error('The next presentation is no longer supported');
   const inputs = [manifest.backend, manifest.frontend?.entry, ...(manifest.frontend?.styles ?? [])];
   for (const file of inputs) {
     if (typeof file !== 'string' || !file.startsWith('dist/') || file.split('/').some(part => !part || part === '.' || part === '..')
