@@ -1,3 +1,15 @@
+# Cockpit Speech 0.9.2 (source preparation)
+
+Assigns a fresh immutable package version for the joint 2026-09-24 afternoon
+deployment preparation with Cockpit host 0.4.6, without runtime behavior changes.
+Manifest and package metadata agree at 0.9.2. This source already includes the
+non-Linux config-read guard from #45 and the release-after-joint-deployment
+documentation pointer from #44.
+
+The SDK foundation pin remains
+`0fa433d99c053df2caf80770f0f8762b9ed7002e`, API/protocol 0.3.0. No tag, Release,
+installation, deployment or restart is performed by this source change.
+
 # Cockpit Speech 0.9.1 (source preparation)
 
 Assigns a fresh immutable package version for the joint 2026-09-24 deployment
