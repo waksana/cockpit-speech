@@ -19,10 +19,12 @@ jobs:
     name: Required checks
     runs-on: ubuntu-24.04
     timeout-minutes: 25
+    env:
+      SOURCE_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
         with:
-          ref: ${{ github.sha }}
+          ref: ${{ env.SOURCE_SHA }}
           fetch-depth: 1
           persist-credentials: false
       - uses: pnpm/action-setup@f40ffcd9367d9f12939873eb1018b921a783ffaa
@@ -44,10 +46,10 @@ jobs:
       - name: Verify the exact module archive
         run: |
           ARCHIVE=$(node --input-type=module -e 'import manifest from "./cockpit.module.json" with { type: "json" }; console.log(`${manifest.id}-${manifest.version}.tgz`)')
-          node scripts/verify-package.mjs "module-output/$ARCHIVE" "$GITHUB_SHA"
+          node scripts/verify-package.mjs "module-output/$ARCHIVE" "$SOURCE_SHA"
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
-          name: cockpit-speech-${{ github.sha }}-linux-x64
+          name: cockpit-speech-${{ env.SOURCE_SHA }}-linux-x64
           path: |
             module-output/*.tgz
             module-output/*.tgz.sha256

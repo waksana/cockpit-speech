@@ -36,6 +36,8 @@ test('SDK identity rejects ranges, local fallback, drift, missing integrity and 
 test('CI uses authenticated registry installation and exact package verification without host source or deployment', async () => {
   const ci = await readFile(new URL('../.github/workflows/build.yml', import.meta.url), 'utf8');
   for (const text of ['pull_request:', 'name: Required checks', 'packages: read',
+    'SOURCE_SHA: ${{ github.event.pull_request.head.sha || github.sha }}',
+    'ref: ${{ env.SOURCE_SHA }}', '"$SOURCE_SHA"',
     'registry-url: https://npm.pkg.github.com', 'NODE_AUTH_TOKEN: ${{ github.token }}',
     'pnpm install --frozen-lockfile --ignore-scripts', 'pnpm typecheck', 'pnpm test',
     'pnpm build', 'pnpm package', 'verify-package.mjs']) assert.ok(ci.includes(text), text);
