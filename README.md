@@ -1,7 +1,10 @@
 # Cockpit Speech
 
-The current source pairs with Cockpit commit
-`0fa433d99c053df2caf80770f0f8762b9ed7002e` (exported SDK version 0.3.0).
+The current source builds with the published
+`@waksana/cockpit-module-sdk@0.2.0` from GitHub Packages. Its exact supported
+host pairing is Cockpit commit `7d69b6f348e17f098bc5562fdbec317e8e2e4ba6`,
+recorded separately in `tooling/host-compatibility.json`.
+SDK semver is not a host compatibility check.
 Recovery UI consumes public `ck-surface` and `ck-actions`; activation requires
 both `context.uiVersion === 1` and `context.uiSurfaceVersion === 1` before
 registering contributions. Missing/unsupported surface capability is rejected.
@@ -374,13 +377,30 @@ not used as a local ownership key. Final text must match the committed item.
 
 ## Development and package
 
-Requires Node **24.20.0** and pnpm **10.34.5**. The immutable SDK SHA and package
-version are recorded in `tooling/host-sdk.json`. Frontend API v2/UI v1,
+Requires Node **24.20.0**, pnpm **10.34.5** and TypeScript **5.9.3**. The exact
+SDK dependency is in `package.json`; `pnpm-lock.yaml` records its registry
+tarball and SHA-512 integrity. A clean source build needs no Cockpit checkout,
+SDK export, workspace link or local tarball. Frontend API v2/UI v1,
 `chatWindowVersion: 1`, `composerInputVersion: 1`, `draftLifecycleVersion: 1`
-and `draftSubmissionVersion: 1` are independently required.
+and `draftSubmissionVersion: 1` plus `uiSurfaceVersion: 1` are independently required.
+
+GitHub Packages requires authentication even for this public SDK. Use a classic
+PAT with `read:packages` and package access via the `NODE_AUTH_TOKEN` environment
+variable. Put the following placeholder in a trusted **user-level** `~/.npmrc`
+(or a file selected by `NPM_CONFIG_USERCONFIG`), not the project `.npmrc`:
+
+```ini
+//npm.pkg.github.com/:_authToken=${NODE_AUTH_TOKEN}
+```
+
+The checked-in `.npmrc` only selects the `@waksana` registry. pnpm does not expand
+credential placeholders from project config. Never put the actual token into a
+file, command argument, log or commit. CI uses `actions/setup-node` registry
+configuration and `NODE_AUTH_TOKEN: ${{ github.token }}` with `packages: read`;
+the package must grant this repository Actions read access.
 
 ```sh
-node scripts/sdk.mjs prepare /path/to/clean-pinned-cockpit
+# NODE_AUTH_TOKEN is already supplied securely through the environment.
 pnpm install --frozen-lockfile --ignore-scripts
 pnpm typecheck
 pnpm test
@@ -391,7 +411,18 @@ node scripts/verify-package.mjs module-output-0.9.2/cockpit-speech-0.9.2.tgz
 ```
 
 Archives contain runtime code, worklet assets, licenses and exact source/SDK
-receipts, never recordings or configuration. Install through the existing host
-module flow; these commands do not deploy. See [development](docs/development.md),
+receipts, never recordings, configuration, node_modules or another React/host
+implementation. Format-2 receipts identify the SDK by package name, version,
+resolved registry tarball and integrity, not a host source SHA. YAML parsing is
+build-only. The frontend obtains React from `context.react`; an automatically
+installed optional React peer stays in the development dependency tree, not the
+archive. SDK backend/frontend types use `/backend` and `/frontend`; common and
+runtime-only consumers use the root and `/runtime` public entries respectively.
+
+This migration does not assign a new Speech runtime version: the next authorized
+joint deployment must choose a fresh version before installing changed bytes.
+Local/CI archives retaining 0.9.2 are verification artifacts, not replacements
+for an existing 0.9.2 installation. These commands do not publish or deploy.
+See [development](docs/development.md),
 [release notes](docs/release-notes.md), [provenance](NOTICE.md) and
 [security](SECURITY.md).

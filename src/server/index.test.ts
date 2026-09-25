@@ -3,7 +3,7 @@ import { test } from 'node:test';
 import { mkdir, rm, writeFile } from 'node:fs/promises';
 import { resolve, join } from 'node:path';
 import { randomUUID } from 'node:crypto';
-import type { ModuleBackendContext, ModuleRequest } from '@cockpit/module-api';
+import type { ModuleBackendContext, ModuleRequest } from '@waksana/cockpit-module-sdk/backend';
 import { activate } from './index.ts';
 import { MAX_JSON_BYTES } from '../shared/limits.ts';
 

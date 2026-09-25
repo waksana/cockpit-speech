@@ -1,3 +1,22 @@
+# Unreleased: independently published SDK build
+
+Replaces the generated local SDK and host export preparation with the exact
+`@waksana/cockpit-module-sdk@0.2.0` GitHub Packages dependency. Backend/frontend
+types use the public environment-specific entries. The lockfile and format-2
+build receipt record the actual registry tarball and integrity; clean source
+builds no longer need a Cockpit checkout. CI authenticates with its repository
+token and read-only package permission. TypeScript library checking remains
+enabled, and archives exclude installed peers and host/runtime implementations.
+
+The separate supported integration pairing is Cockpit source
+`7d69b6f348e17f098bc5562fdbec317e8e2e4ba6` in
+`tooling/host-compatibility.json`. SDK semver does not replace API/capability gates.
+There is no change to capture, provider, drafts, recovery or submission behavior.
+This change intentionally retains the source version 0.9.2; a future authorized
+joint deployment must allocate a fresh runtime version before installation.
+It creates no tag, Release, installation or deployment. Earlier sections below
+describe their historical source trees, including retired SDK pin paths.
+
 # Cockpit Speech 0.9.2 (source preparation)
 
 Assigns a fresh immutable package version for the joint 2026-09-24 afternoon

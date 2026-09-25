@@ -1,4 +1,4 @@
-import type { ModuleBackend, ModuleBackendContext, ModuleResponse } from '@cockpit/module-api';
+import type { ModuleBackend, ModuleBackendContext, ModuleResponse } from '@waksana/cockpit-module-sdk/backend';
 import { MAX_JSON_BYTES, SpeechError } from '../shared/limits.ts';
 import { azureSessionIssuer, parseInput } from './azure.ts';
 import type { SessionIssuer } from './azure.ts';

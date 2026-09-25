@@ -1,9 +1,7 @@
 node_modules/
-.cockpit-sdk/
 dist/
 .module-build.json
 module-output*/
 .test-work/
-.host-sdk-source/
 azure-speech.json
 *.log

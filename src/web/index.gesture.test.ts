@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { test, type TestContext } from 'node:test';
-import type { ComposerInputProps, ModuleDraft, ModuleFrontendContext } from '@cockpit/module-api';
+import type { ComposerInputProps, ModuleDraft, ModuleFrontendContext } from '@waksana/cockpit-module-sdk/frontend';
 import { activate } from './index.ts';
 import { CANCEL_DISTANCE, HOLD_DELAY, HoldGesture } from './hold.ts';
 import type { SpeechService } from './speech.ts';

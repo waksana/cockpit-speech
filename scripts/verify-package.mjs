@@ -4,7 +4,24 @@ import { execFileSync } from 'node:child_process';
 import { readFile, stat } from 'node:fs/promises';
 import { basename, resolve, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { git, loadSdkPin, sameJson } from './build-identity.mjs';
+import ts from 'typescript';
+import { git, loadSdkIdentity, sameJson } from './build-identity.mjs';
+
+function verifyImports(path, bytes) {
+  const source = ts.createSourceFile(path, bytes.toString('utf8'), ts.ScriptTarget.Latest, true, ts.ScriptKind.JS);
+  function check(specifier) {
+    assert.ok(specifier && ts.isStringLiteral(specifier), `Nonliteral module import in ${path}`);
+    assert.ok(specifier.text.startsWith('./') || specifier.text.startsWith('../')
+      || (!path.startsWith('dist/web/') && specifier.text.startsWith('node:')),
+    `External runtime import in ${path}: ${specifier.text}`);
+  }
+  function visit(node) {
+    if (ts.isImportDeclaration(node) || (ts.isExportDeclaration(node) && node.moduleSpecifier)) check(node.moduleSpecifier);
+    if (ts.isCallExpression(node) && node.expression.kind === ts.SyntaxKind.ImportKeyword) check(node.arguments[0]);
+    ts.forEachChild(node, visit);
+  }
+  visit(source);
+}
 
 export async function verifyPackage(root, archive, sourceSha = git(root, ['rev-parse', 'HEAD'])) {
   assert.match(sourceSha, /^[a-f0-9]{40}$/);
@@ -23,7 +40,7 @@ export async function verifyPackage(root, archive, sourceSha = git(root, ['rev-p
   assert.equal(manifest.id, 'cockpit-speech');
   assert.equal(manifest.version, metadata.version);
   assert.equal(basename(archive), `${manifest.id}-${manifest.version}.tgz`);
-  assert.equal(build.format, 1);
+  assert.equal(build.format, 2);
   assert.equal(build.product, manifest.id);
   assert.equal(build.version, manifest.version);
   assert.equal(build.sourceSha, sourceSha);
@@ -31,7 +48,7 @@ export async function verifyPackage(root, archive, sourceSha = git(root, ['rev-p
   assert.equal(build.node, process.versions.node);
   assert.equal(build.platform, 'linux');
   assert.equal(build.arch, 'x64');
-  assert.ok(sameJson(build.sdk, await loadSdkPin(root)), 'Build used a different host SDK');
+  assert.ok(sameJson(build.sdk, await loadSdkIdentity(root)), 'Build used a different SDK package');
   assert.ok(Array.isArray(build.files));
   const expected = new Set(['module-build.json']);
   for (const file of build.files) {
@@ -44,6 +61,7 @@ export async function verifyPackage(root, archive, sourceSha = git(root, ['rev-p
     const bytes = read(file.path);
     assert.equal(bytes.length, file.bytes);
     assert.equal(createHash('sha256').update(bytes).digest('hex'), file.sha256);
+    if (file.path.endsWith('.js')) verifyImports(file.path, bytes);
   }
   for (const name of names) if (!name.endsWith('/')) assert.ok(expected.delete(name), `Unexpected package file: ${name}`);
   assert.equal(expected.size, 0, 'An inventoried file is missing');

@@ -1,4 +1,4 @@
-import type { CapturedDraftSend, ChatWindowSnapshot, DraftPurpose, HostSnapshot, ModuleDraft, ReadonlyState } from '@cockpit/module-api';
+import type { CapturedDraftSend, ChatWindowSnapshot, DraftPurpose, HostSnapshot, ModuleDraft, ReadonlyState } from '@waksana/cockpit-module-sdk/frontend';
 import { SpeechError } from '../shared/limits.ts';
 import { askContext, recentContext } from './context.ts';
 import type { Recording, RecordingPreparation, PrepareRecording } from './recorder.ts';

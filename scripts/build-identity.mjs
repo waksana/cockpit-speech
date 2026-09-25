@@ -2,6 +2,7 @@ import { createHash } from 'node:crypto';
 import { execFileSync } from 'node:child_process';
 import { lstat, readdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
+import { parse } from 'yaml';
 
 export function git(root, args) {
   return execFileSync('git', args, { cwd: root, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] }).trim();
@@ -21,14 +22,24 @@ export function sourceIdentity(root, strict = false) {
   return dirty ? null : sha;
 }
 
-export async function loadSdkPin(root) {
-  const pin = JSON.parse(await readFile(join(root, 'tooling/host-sdk.json'), 'utf8'));
-  if (pin.repository !== 'waksana/cockpit' || !/^[a-f0-9]{40}$/.test(pin.commit)
-    || !/^\d+\.\d+\.\d+$/.test(pin.version) || pin.apiVersion !== 1
-    || Object.keys(pin).sort().join(',') !== 'apiVersion,commit,repository,version') {
-    throw new Error('Invalid pinned host SDK identity');
+export async function loadSdkIdentity(root) {
+  const name = '@waksana/cockpit-module-sdk';
+  const metadata = JSON.parse(await readFile(join(root, 'package.json'), 'utf8'));
+  const version = metadata.devDependencies?.[name];
+  const lock = parse(await readFile(join(root, 'pnpm-lock.yaml'), 'utf8'));
+  const dependency = lock?.importers?.['.']?.devDependencies?.[name];
+  const resolution = lock?.packages?.[`${name}@${version}`]?.resolution;
+  if (typeof version !== 'string' || !/^\d+\.\d+\.\d+$/.test(version)
+    || lock?.lockfileVersion !== '9.0' || dependency?.specifier !== version
+    || dependency?.version?.split('(')[0] !== version
+    || typeof resolution?.integrity !== 'string' || !/^sha512-[A-Za-z0-9+/]{86}==$/.test(resolution.integrity)
+    || typeof resolution?.tarball !== 'string'
+    || !resolution.tarball.startsWith(`https://npm.pkg.github.com/download/${name}/${version}/`)) {
+    throw new Error('SDK must be exactly pinned to a GitHub Packages resolution with SHA-512 integrity');
   }
-  return pin;
+  const url = new URL(resolution.tarball);
+  if (url.username || url.password || url.search || url.hash) throw new Error('SDK resolution must not contain credentials or URL parameters');
+  return { name, version, resolved: resolution.tarball, integrity: resolution.integrity };
 }
 
 export async function inventory(root, roots) {
@@ -53,13 +64,12 @@ export async function inventory(root, roots) {
 export const sameJson = (a, b) => JSON.stringify(a) === JSON.stringify(b);
 
 export async function sdkIdentity(root) {
-  const pin = await loadSdkPin(root);
-  const saved = JSON.parse(await readFile(join(root, '.cockpit-sdk/pin.json'), 'utf8'));
-  const files = await inventory(join(root, '.cockpit-sdk'), ['module-api', 'protocol', 'LICENSE']);
-  if (!sameJson(saved.pin, pin) || !sameJson(saved.files, files)) {
-    throw new Error('Generated SDK differs from its pin; run the SDK preparation step');
+  const identity = await loadSdkIdentity(root);
+  const installed = JSON.parse(await readFile(join(root, 'node_modules', identity.name, 'package.json'), 'utf8'));
+  if (installed.name !== identity.name || installed.version !== identity.version) {
+    throw new Error('Installed SDK differs from the locked package identity; run a frozen-lockfile install');
   }
-  return pin;
+  return identity;
 }
 
 export async function writeBuildReceipt(root, before) {
@@ -69,7 +79,7 @@ export async function writeBuildReceipt(root, before) {
   const expectedNode = (await readFile(join(root, '.node-version'), 'utf8')).trim();
   if (process.versions.node !== expectedNode) throw new Error(`Build requires Node ${expectedNode}`);
   const receipt = {
-    format: 1, product: 'cockpit-speech', version: metadata.version, sourceSha,
+    format: 2, product: 'cockpit-speech', version: metadata.version, sourceSha,
     sdk: await sdkIdentity(root), node: process.versions.node, platform: process.platform, arch: process.arch,
     files: await inventory(root, ['cockpit.module.json', 'dist', 'LICENSE']),
   };
@@ -84,11 +94,11 @@ export async function checkedBuild(root) {
   const file = join(root, '.module-build.json');
   if (!(await lstat(file)).isFile()) throw new Error('Build receipt must be a regular file');
   const receipt = JSON.parse(await readFile(file, 'utf8'));
-  const pin = await sdkIdentity(root);
+  const sdk = await sdkIdentity(root);
   const metadata = JSON.parse(await readFile(join(root, 'package.json'), 'utf8'));
-  if (receipt.format !== 1 || receipt.product !== 'cockpit-speech' || receipt.sourceSha !== sourceSha
+  if (receipt.format !== 2 || receipt.product !== 'cockpit-speech' || receipt.sourceSha !== sourceSha
     || receipt.version !== metadata.version || receipt.node !== process.versions.node
-    || receipt.platform !== process.platform || receipt.arch !== process.arch || !sameJson(receipt.sdk, pin)
+    || receipt.platform !== process.platform || receipt.arch !== process.arch || !sameJson(receipt.sdk, sdk)
     || !sameJson(receipt.files, await inventory(root, ['cockpit.module.json', 'dist', 'LICENSE']))) {
     throw new Error('Build output is stale or modified; rebuild the clean committed source');
   }

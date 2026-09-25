@@ -1,4 +1,4 @@
-import type { ChatWindowSnapshot, DraftAskContext, HostSnapshot } from '@cockpit/module-api';
+import type { ChatWindowSnapshot, DraftAskContext, HostSnapshot } from '@waksana/cockpit-module-sdk/frontend';
 import { MAX_CONTEXT_POINTS } from '../shared/limits.ts';
 
 /** Question first, then ordered choices within the same total Unicode budget. */
