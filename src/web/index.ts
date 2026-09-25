@@ -1,4 +1,4 @@
-import type { ActivateFrontend, ComposerInputProps } from '@cockpit/module-api';
+import type { ActivateFrontend, ComposerInputProps } from '@waksana/cockpit-module-sdk/frontend';
 import { createSpeechFrontend } from './frontend.ts';
 import { icons } from './icons.ts';
 

@@ -56,6 +56,21 @@ test('packaging rejects dirty source, stale builds, SDK changes and tampered dis
   await writeFile(join(f.root, 'dist/web.js'), 'Changed output');
   await assert.rejects(packageModule(f.root, f.output), /stale or modified/);
   await f.receipt();
-  await writeFile(join(f.root, '.cockpit-sdk/protocol/package.json'), '{"version":"changed"}');
+  await writeFile(join(f.root, 'node_modules', f.sdk.name, 'package.json'), '{"version":"changed"}');
   await assert.rejects(packageModule(f.root, f.output), /SDK differs/);
+});
+
+test('archive verification rejects external runtime imports, including React and SDK implementations', async t => {
+  const f = await fixture(t);
+  for (const [index, code] of [
+    'import React from "react";',
+    'export * from "@waksana/cockpit-module-sdk/frontend";',
+    'await import("zod");',
+    'await import(provider);',
+  ].entries()) {
+    await writeFile(join(f.root, 'dist/web.js'), code);
+    await f.receipt();
+    const archive = await packageModule(f.root, join(f.root, `output-${index}`));
+    await assert.rejects(verifyPackage(f.root, archive), /runtime import|Nonliteral module import/);
+  }
 });

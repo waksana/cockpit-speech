@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { readFile } from 'node:fs/promises';
-import type { ComposerInputProps, ModuleDraft, ModuleFrontendContext } from '@cockpit/module-api';
+import type { ComposerInputProps, ModuleDraft, ModuleFrontendContext } from '@waksana/cockpit-module-sdk/frontend';
 import { activate, composeEditorRef } from './index.ts';
 import type { SpeechService, SpeechSnapshot } from './speech.ts';
 import { HoldGesture } from './hold.ts';

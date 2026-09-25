@@ -8,6 +8,7 @@ on:
 
 permissions:
   contents: read
+  packages: read
 
 concurrency:
   group: ci-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
@@ -30,27 +31,20 @@ jobs:
       - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38
         with:
           node-version-file: .node-version
-      - id: sdk
-        name: Read pinned SDK identity
-        run: node scripts/sdk.mjs info >> "$GITHUB_OUTPUT"
-      - name: Check out the fixed host SDK
-        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
-        with:
-          repository: ${{ steps.sdk.outputs.repository }}
-          ref: ${{ steps.sdk.outputs.commit }}
-          path: .host-sdk-source
-          fetch-depth: 1
-          persist-credentials: false
-      - run: node scripts/sdk.mjs prepare .host-sdk-source
-      - run: pnpm install --frozen-lockfile --ignore-scripts
+          registry-url: https://npm.pkg.github.com
+          scope: '@waksana'
+      - name: Install the published SDK and locked dependencies
+        run: pnpm install --frozen-lockfile --ignore-scripts
+        env:
+          NODE_AUTH_TOKEN: ${{ github.token }}
       - run: pnpm typecheck
       - run: pnpm test
       - run: pnpm build
       - run: pnpm package
       - name: Verify the exact module archive
-        env:
-          ARCHIVE: ${{ steps.sdk.outputs.archive }}
-        run: node scripts/verify-package.mjs "module-output/$ARCHIVE" "$GITHUB_SHA"
+        run: |
+          ARCHIVE=$(node --input-type=module -e 'import manifest from "./cockpit.module.json" with { type: "json" }; console.log(`${manifest.id}-${manifest.version}.tgz`)')
+          node scripts/verify-package.mjs "module-output/$ARCHIVE" "$GITHUB_SHA"
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
           name: cockpit-speech-${{ github.sha }}-linux-x64

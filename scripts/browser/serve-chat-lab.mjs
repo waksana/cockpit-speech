@@ -5,7 +5,7 @@ import { readFile } from 'node:fs/promises';
 
 const host = resolve(process.argv[2]);
 const root = resolve(import.meta.dirname, '../..');
-const pin = JSON.parse(await readFile(resolve(root, 'tooling/host-sdk.json'), 'utf8'));
+const pin = JSON.parse(await readFile(resolve(root, 'tooling/host-compatibility.json'), 'utf8'));
 if (execFileSync('git', ['-C', host, 'rev-parse', 'HEAD'], { encoding: 'utf8' }).trim() !== pin.commit) {
   throw new Error('Chat Lab must use the exact pinned host commit');
 }

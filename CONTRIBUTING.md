@@ -1,7 +1,8 @@
 # Contributing to Cockpit Speech
 
 Use an isolated branch/worktree and synthetic fixtures. Follow the README's
-Node/pnpm, exact host SDK preparation and existing typecheck/test/build commands.
+Node/pnpm, authenticated frozen-lockfile registry install and existing
+typecheck/test/build commands. Clean builds do not require host source.
 Do not use real recordings, credentials or production sessions for validation.
 
 ## Immutable installation versions
@@ -14,9 +15,11 @@ bytes/digest. Source SHAs and digests record provenance, not replacement version
 
 Synchronize `package.json`, `cockpit.module.json`, any embedded versions and
 applicable lockfile metadata, current-source compatibility and release notes.
-Keep historical release statements intact. The SDK pin changes only for a real
-host-contract requirement; use the coordinated reachable clean source SHA, never
-a dirty local export. Activation requires `uiVersion: 1` and `uiSurfaceVersion: 1`.
+Keep historical release statements intact. Pin the independently released SDK
+exactly with its registry integrity; never use a generated host export as a
+fallback. The supported host source in `tooling/host-compatibility.json` is only
+for integration pairing, not a build input or an SDK semver comparison.
+Activation requires `uiVersion: 1` and `uiSurfaceVersion: 1`.
 
 Commit the final source, rebuild, package and verify the exact artifact with the
 existing scripts/CI. Never delete installed module directories or force a bypass

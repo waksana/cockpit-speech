@@ -278,12 +278,35 @@ never production configuration or user recordings. They cover:
 
 Run `pnpm typecheck`, `pnpm test`, then `pnpm build`. Packaging requires a fresh
 build from clean committed source; use a new output directory and the existing
-package verifier. The precise host pin is in `tooling/host-sdk.json`: reachable foundation
-`0fa433d99c053df2caf80770f0f8762b9ed7002e`, API/protocol 0.3.0. This package requires
-Cockpit 0.3.0. Existing persisted draft encodings are preserved. The foundation does not establish
-completion or deployment of the final host application.
+package verifier. Follow the README's GitHub Packages authentication setup for
+`pnpm install --frozen-lockfile --ignore-scripts`. The compiler uses NodeNext,
+TypeScript 5.9.3, Node types 25 and React types 19 with full library checking.
+The SDK also supports Node types 22-25 and matching React/types 18 or 19; those
+optional peers describe entry-point compilation, not module runtime dependencies.
+Registry metadata may cause the package manager to install React as a peer. Only
+Speech's own TypeScript output, CSS and licenses enter the module archive;
+frontend code uses the host-provided `context.react`.
 
-The paired host regression imports the actual compiled middleware:
+`scripts/build-identity.mjs` parses the locked registry resolution with the
+build-only YAML parser and checks the installed SDK name/version. Format-2 build
+receipts record the exact package name/version, resolved tarball URL and SHA-512
+integrity. The package verifier compares that identity and the source/output
+inventory and rejects external JavaScript runtime imports. No host source or
+generated SDK inventory is involved in clean build/test/package/verification.
+CI installs directly from the registry using its repository `GITHUB_TOKEN`;
+local PAT access alone does not establish Actions package access.
+
+Integration tests are a separate, explicit host pairing. The exact supported
+source is `7d69b6f348e17f098bc5562fdbec317e8e2e4ba6`, recorded in
+`tooling/host-compatibility.json`. SDK 0.2.0 semver does not imply a minimum host
+version: frontend API v2 and all existing UI/chat/input/draft capability checks
+remain required. Existing persisted draft encodings are preserved. This source
+migration does not create a new runtime release or deploy either repository.
+
+In an isolated clean checkout of that exact host commit, install its frozen
+dependencies and build its protocol/SDK workspace packages using the host's own
+scripts. Then the paired regression imports the actual compiled Speech middleware
+(the workspace SDK build is for the host, never Speech's build input):
 
 ```sh
 COCKPIT_TEST_SPEECH_ENTRY=/absolute/cockpit-speech/dist/web/index.js \
@@ -294,6 +317,19 @@ COCKPIT_TEST_SPEECH_ENTRY=/absolute/cockpit-speech/dist/web/index.js \
 Use the host's existing Chat Lab for browser interaction, with synthetic
 microphone/credential/socket fixtures. Do not build a parallel demo app or
 connect the Lab to native sessions. Lab CSP intentionally excludes Azure.
+Use separate `HOME`, `COPILOT_HOME` and `COCKPIT_HOME` fixture directories; do not
+use the production port or real sessions. Keep validation bounded, for example:
+
+```sh
+DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/1000/bus \
+XDG_RUNTIME_DIR=/run/user/1000 \
+  systemd-run --user --scope -p MemoryMax=3G -p MemorySwapMax=0 \
+  timeout 300 pnpm test
+```
+
+This Linux user-scope example is environment-specific; use equivalent isolation
+and limits elsewhere. The browser Lab uses loopback port 5187 with `strictPort`;
+confirm it is free instead of stopping an unrelated process.
 
 ### Page-wide F8 browser regression (#27)
 

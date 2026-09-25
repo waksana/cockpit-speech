@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import type { DraftAskContext, DraftPurpose, DraftSendResult, ModuleDraft } from '@cockpit/module-api';
+import type { DraftAskContext, DraftPurpose, DraftSendResult, ModuleDraft } from '@waksana/cockpit-module-sdk/frontend';
 import { prepareRecording } from './recorder.ts';
 import type { AudioEnvironment } from './recorder.ts';
 import { SpeechService } from './speech.ts';

@@ -1,4 +1,4 @@
-import type { ComposerInputProps, ModuleFrontendContext } from '@cockpit/module-api';
+import type { ComposerInputProps, ModuleFrontendContext } from '@waksana/cockpit-module-sdk/frontend';
 import type { HTMLAttributes, Ref } from 'react';
 import { HoldGesture } from './hold.ts';
 import { KeyboardHold } from './keyboard.ts';

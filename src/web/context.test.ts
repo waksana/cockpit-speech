@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import type { ChatWindowMessage, ChatWindowSnapshot, HostSnapshot } from '@cockpit/module-api';
+import type { ChatWindowMessage, ChatWindowSnapshot, HostSnapshot } from '@waksana/cockpit-module-sdk/frontend';
 import { askContext, recentContext } from './context.ts';
 
 const host: HostSnapshot = { sessionId: 's', visible: true, connected: true };

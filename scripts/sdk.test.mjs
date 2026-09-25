@@ -1,52 +1,58 @@
 import assert from 'node:assert/strict';
-import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { readFile, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
-import { execFileSync } from 'node:child_process';
 import { test } from 'node:test';
-import { prepareSdk } from './sdk.mjs';
-import { git, sdkIdentity } from './build-identity.mjs';
-import { commitFixture, releaseFixture } from './test-support/release-fixture.mjs';
+import { stringify } from 'yaml';
+import { loadSdkIdentity, sdkIdentity } from './build-identity.mjs';
+import { releaseFixture } from './test-support/release-fixture.mjs';
 
-test('SDK export verifies exact clean host SHA, package version and generated inventory', async t => {
+test('SDK receipt identifies the locked registry package without a host checkout', async t => {
   const f = await releaseFixture(t);
-  const host = await mkdtemp(new URL('../node_modules/sdk-host-fixture-', import.meta.url));
-  t.after(() => rm(host, { recursive: true, force: true }));
-  for (const name of ['module-api', 'protocol']) {
-    await mkdir(join(host, 'packages', name), { recursive: true });
-    await writeFile(join(host, 'packages', name, 'package.json'), '{"version":"0.2.0"}');
-  }
-  await mkdir(join(host, 'scripts'));
-  await writeFile(join(host, 'scripts/export-module-api.mjs'), `
-import {mkdir,writeFile} from 'node:fs/promises';
-const target=process.argv[2];
-await mkdir(target);
-for(const name of ['module-api','protocol']){
-  await mkdir(target+'/'+name);
-  await writeFile(target+'/'+name+'/package.json',JSON.stringify({name:'@cockpit/'+name,version:'0.2.0'}));
-}
-await writeFile(target+'/LICENSE','Synthetic SDK license');
-`);
-  execFileSync('git', ['init', '-q', '-b', 'main'], { cwd: host, stdio: 'pipe' });
-  commitFixture(host);
-  const pin = { ...f.pin, commit: git(host, ['rev-parse', 'HEAD']) };
-  await writeFile(join(f.root, 'tooling/host-sdk.json'), JSON.stringify(pin));
-  assert.deepEqual(await prepareSdk(f.root, host), pin);
-  assert.deepEqual(await sdkIdentity(f.root), pin);
-  assert.deepEqual(await prepareSdk(f.root, host), pin);
-  await writeFile(join(host, 'dirty.txt'), 'Uncommitted host change');
-  await assert.rejects(prepareSdk(f.root, host), /clean, exact pinned/);
-  await rm(join(host, 'dirty.txt'));
-  await writeFile(join(f.root, '.cockpit-sdk/protocol/package.json'), '{"version":"different"}');
-  await assert.rejects(prepareSdk(f.root, host), /Existing generated SDK differs/);
+  assert.deepEqual(await loadSdkIdentity(f.root), f.sdk);
+  assert.deepEqual(await sdkIdentity(f.root), f.sdk);
+  await writeFile(join(f.root, 'node_modules', f.sdk.name, 'package.json'), JSON.stringify({ name: f.sdk.name, version: '0.1.1' }));
+  await assert.rejects(sdkIdentity(f.root), /Installed SDK differs/);
 });
 
-test('CI uses fixed SDK checkout, frozen dependencies and exact package verification without credentials/deployment', async () => {
+test('SDK identity rejects ranges, local fallback, drift, missing integrity and credential-bearing URLs', async t => {
+  const f = await releaseFixture(t);
+  for (const mutate of [
+    lock => { lock.importers['.'].devDependencies[f.sdk.name].specifier = '^0.2.0'; },
+    lock => { lock.importers['.'].devDependencies[f.sdk.name].version = '0.1.1'; },
+    lock => { delete lock.packages[`${f.sdk.name}@${f.sdk.version}`].resolution.integrity; },
+    lock => { lock.packages[`${f.sdk.name}@${f.sdk.version}`].resolution.tarball = 'file:sdk.tgz'; },
+    lock => { lock.packages[`${f.sdk.name}@${f.sdk.version}`].resolution.tarball = f.sdk.resolved + '?token=fixture'; },
+  ]) {
+    const lock = structuredClone(f.lock);
+    mutate(lock);
+    await writeFile(join(f.root, 'pnpm-lock.yaml'), stringify(lock));
+    await assert.rejects(loadSdkIdentity(f.root), /SDK/);
+  }
+  await writeFile(join(f.root, 'pnpm-lock.yaml'), stringify(f.lock));
+  await writeFile(join(f.root, 'package.json'), JSON.stringify({ devDependencies: { [f.sdk.name]: '^0.2.0' } }));
+  await assert.rejects(loadSdkIdentity(f.root), /SDK must be exactly pinned/);
+});
+
+test('CI uses authenticated registry installation and exact package verification without host source or deployment', async () => {
   const ci = await readFile(new URL('../.github/workflows/build.yml', import.meta.url), 'utf8');
-  for (const text of ['pull_request:', 'name: Required checks', 'sdk.mjs prepare .host-sdk-source',
+  for (const text of ['pull_request:', 'name: Required checks', 'packages: read',
+    'registry-url: https://npm.pkg.github.com', 'NODE_AUTH_TOKEN: ${{ github.token }}',
     'pnpm install --frozen-lockfile --ignore-scripts', 'pnpm typecheck', 'pnpm test',
     'pnpm build', 'pnpm package', 'verify-package.mjs']) assert.ok(ci.includes(text), text);
-  assert.doesNotMatch(ci, /contents: write|pull_request_target|secrets\.|ssh |systemctl|release create/);
+  assert.doesNotMatch(ci, /contents: write|packages: write|pull_request_target|secrets\.|ssh |systemctl|release create|sdk:prepare|host-sdk|legacy-peer-deps/);
   for (const [, use] of ci.matchAll(/uses:\s+([^\s]+)/g)) assert.match(use, /^[\w/-]+@[a-f0-9]{40}$/);
+  assert.doesNotMatch(await readFile(new URL('../.npmrc', import.meta.url), 'utf8'), /authToken/);
+  const tsconfig = JSON.parse(await readFile(new URL('../tsconfig.json', import.meta.url), 'utf8'));
+  assert.notEqual(tsconfig.compilerOptions.skipLibCheck, true);
+});
+
+test('published SDK has four importable public entries and no bundled runtime dependencies', async () => {
+  const sdk = JSON.parse(await readFile(new URL('../node_modules/@waksana/cockpit-module-sdk/package.json', import.meta.url), 'utf8'));
+  assert.equal(sdk.version, '0.2.0');
+  assert.deepEqual(Object.keys(sdk.exports).sort(), ['.', './backend', './frontend', './runtime']);
+  assert.equal(Object.keys(sdk.dependencies ?? {}).length, 0);
+  for (const name of ['@types/node', '@types/react', 'react']) assert.equal(sdk.peerDependenciesMeta[name].optional, true);
+  for (const suffix of ['', '/backend', '/frontend', '/runtime']) await import(`@waksana/cockpit-module-sdk${suffix}`);
 });
 
 test('source icon nodes and shipped notice match lucide-static exactly', async () => {
