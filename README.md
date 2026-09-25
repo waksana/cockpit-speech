@@ -127,7 +127,7 @@ Focused or nonempty inputs keep native editing. To paste into an empty unfocused
 input, tap first, then use native long-press paste. Keyboard Tab still focuses
 the real textarea; the gesture layer adds no tab stop. The independent microphone
 button remains the accessible alternative and retains its existing behavior.
-Speech 0.9.2 requires the paired host's `draftLifecycleVersion: 1` and
+Speech 0.9.3 requires the paired host's `draftLifecycleVersion: 1` and
 `draftSubmissionVersion: 1` capabilities
 as well as Cockpit's additive public UI classes. It uses the
 existing `composerEditor` middleware for the full-width status row and leaves
@@ -406,8 +406,8 @@ pnpm typecheck
 pnpm test
 pnpm build
 # After committing clean source; use a new output directory.
-node scripts/package.mjs module-output-0.9.2
-node scripts/verify-package.mjs module-output-0.9.2/cockpit-speech-0.9.2.tgz
+node scripts/package.mjs module-output-0.9.3
+node scripts/verify-package.mjs module-output-0.9.3/cockpit-speech-0.9.3.tgz
 ```
 
 Archives contain runtime code, worklet assets, licenses and exact source/SDK
@@ -419,10 +419,11 @@ installed optional React peer stays in the development dependency tree, not the
 archive. SDK backend/frontend types use `/backend` and `/frontend`; common and
 runtime-only consumers use the root and `/runtime` public entries respectively.
 
-This migration does not assign a new Speech runtime version: the next authorized
-joint deployment must choose a fresh version before installing changed bytes.
-Local/CI archives retaining 0.9.2 are verification artifacts, not replacements
-for an existing 0.9.2 installation. These commands do not publish or deploy.
+Current source assigns the fresh patch identity 0.9.3 to this compatible SDK
+migration, without changing capture, provider or draft behavior. An authorized
+joint deployment must preserve the original successful main CI archive, including
+its tar modes and digest; local rebuilds are not substitutes. Never replace an
+existing 0.9.2 installation's bytes. These commands do not publish or deploy.
 See [development](docs/development.md),
 [release notes](docs/release-notes.md), [provenance](NOTICE.md) and
 [security](SECURITY.md).

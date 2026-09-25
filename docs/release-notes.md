@@ -1,4 +1,4 @@
-# Unreleased: independently published SDK build
+# Cockpit Speech 0.9.3 (source preparation)
 
 Replaces the generated local SDK and host export preparation with the exact
 `@waksana/cockpit-module-sdk@0.2.0` GitHub Packages dependency. Backend/frontend
@@ -12,9 +12,12 @@ The separate supported integration pairing is Cockpit source
 `7d69b6f348e17f098bc5562fdbec317e8e2e4ba6` in
 `tooling/host-compatibility.json`. SDK semver does not replace API/capability gates.
 There is no change to capture, provider, drafts, recovery or submission behavior.
-This change intentionally retains the source version 0.9.2; a future authorized
-joint deployment must allocate a fresh runtime version before installation.
-It creates no tag, Release, installation or deployment. Earlier sections below
+Package and manifest now agree at the fresh immutable patch identity 0.9.3;
+changed package bytes must never replace an existing 0.9.2 installation.
+Preserve the original successful main CI archive, including tar modes and digest,
+for any separately authorized joint deployment. No local repackage substitutes
+for that artifact. This creates no tag, Release, installation, deployment or
+restart, and claims no real microphone, provider or Windows acceptance. Earlier sections below
 describe their historical source trees, including retired SDK pin paths.
 
 # Cockpit Speech 0.9.2 (source preparation)
