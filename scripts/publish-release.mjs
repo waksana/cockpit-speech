@@ -39,6 +39,11 @@ export async function publishRelease({ repository, tag, sha, directory, notes: r
     assert.ok(matches.length <= 1, `Conflicting Releases for exact tag ${tag}; inspect all matching IDs`);
     return matches[0];
   };
+  const checkKnownDiscovery = id => {
+    const listed = discover();
+    // Release lists can lag writes. Once known, the ID endpoint is authoritative.
+    if (listed) assert.equal(listed.id, id, 'Release discovery changed');
+  };
   const mutate = args => {
     try {
       return run(args);
@@ -105,9 +110,7 @@ export async function publishRelease({ repository, tag, sha, directory, notes: r
       '-f', 'make_latest=false',
       '-f', `name=Cockpit Speech ${tag}`, '-f', `body=${rolling ? rollingNotes : `${notes}\n\n${generated.body}`}`]).toString());
     assert.ok(Number.isSafeInteger(created.id) && created.id > 0, 'Create returned no Release ID; inspect the unknown result before rerunning');
-    release = discover();
-    assert.equal(release?.id, created.id, 'Created draft discovery differs; inspect the unknown result before rerunning');
-    releaseAt(created.id, true);
+    release = releaseAt(created.id, true);
     assert.deepEqual(pages(`${endpoint}/${created.id}/assets`), [], 'New draft already has assets; refusing to upload');
     for (const name of names) {
       mutate(['api', `https://uploads.github.com/${endpoint}/${created.id}/assets?name=${encodeURIComponent(name)}`,
@@ -117,14 +120,14 @@ export async function publishRelease({ repository, tag, sha, directory, notes: r
   }
   const id = release.id;
   const assets = await inspect(id, true);
-  assert.equal(discover()?.id, id, 'Release discovery changed before publication');
+  checkKnownDiscovery(id);
   releaseAt(id, true);
   assert.deepEqual(assetsAt(id), assets, 'Release assets changed before publication');
   expectedNotes = rolling ? publicationNotes(rollingNotes, id, tag, sha, assets) : undefined;
   mutate(['api', `${endpoint}/${id}`, '--method', 'PATCH',
     '-F', 'draft=false', '-F', `prerelease=${rolling}`, '-f', `make_latest=${!rolling}`,
     ...(rolling ? ['-f', `body=${expectedNotes}`] : [])]);
-  assert.equal(discover()?.id, id, 'Published Release discovery changed; inspect before retrying');
+  checkKnownDiscovery(id);
   assert.deepEqual(await inspect(id, false), assets, 'Published asset identity changed');
   return { id, tag, status: 'published' };
 }

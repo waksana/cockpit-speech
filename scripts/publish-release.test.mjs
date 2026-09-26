@@ -114,6 +114,18 @@ test('Rolling creates four assets then publishes verified prerelease without tak
   assert.equal(f.mutations().length, 6);
 });
 
+test('known-ID publication succeeds when paginated discovery omits the newly created or published release', async t => {
+  for (const rolling of [false, true]) {
+    const f = await fixture(t, { rolling, releases: [], intercept: args =>
+      args[1] === `${endpoint}?per_page=100` ? [[]] : undefined });
+    await f.publish();
+    assert.equal(f.mutations().length, rolling ? 6 : 4);
+    assert.equal(f.state.releases[0].draft, false);
+    assert.equal(f.state.verified.length, 3);
+    assert.ok(f.state.calls.some(args => args[1] === `${endpoint}/42`));
+  }
+});
+
 test('Rolling recovers only unchanged complete exact-source draft with complete PR notes', async t => {
   const f = await fixture(t, { rolling: true });
   await f.publish();

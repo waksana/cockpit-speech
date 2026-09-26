@@ -21,6 +21,7 @@ function fixture(options = {}) {
     release.id, value.tag, value.sourceSha, assets);
   const calls = [];
   let assetReads = 0;
+  let discoveryReads = 0;
   const endpoint = `repos/${repository}/releases`;
   const run = args => {
     calls.push(args);
@@ -36,7 +37,10 @@ function fixture(options = {}) {
     if (args[1].includes('/git/matching-refs/')) return response([{
       ref: `refs/tags/${value.tag}`, object: { type: 'commit', sha: value.sourceSha },
     }]);
-    if (args[1] === `${endpoint}?per_page=100`) return response([[release]]);
+    if (args[1] === `${endpoint}?per_page=100`) {
+      discoveryReads++;
+      return response(options.listLag && discoveryReads > 1 ? [[]] : [[release]]);
+    }
     if (args[1] === `${endpoint}/42` || args[1] === `${endpoint}/latest`) return response(release);
     if (args[1] === `${endpoint}/42/assets?per_page=100`) {
       assetReads++;
@@ -67,6 +71,12 @@ test('Milestone changes only prerelease and Latest on original ID, with all iden
   assert.deepEqual(f.release, { ...before, prerelease: false });
   assert.equal(f.mutations().length, 1);
   await assert.rejects(f.promote(), /unpromoted/);
+  assert.equal(f.mutations().length, 1);
+});
+
+test('known-ID promotion tolerates omitted list entries while directly verifying original release and assets', async () => {
+  const f = fixture({ listLag: true });
+  assert.equal((await f.promote()).status, 'milestone');
   assert.equal(f.mutations().length, 1);
 });
 

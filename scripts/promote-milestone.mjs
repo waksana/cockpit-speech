@@ -22,9 +22,9 @@ export async function promoteMilestone({ tag, confirmation, sha },
     assert.ok(Array.isArray(result) && result.length > 0 && result.every(Array.isArray), 'Invalid discovery');
     return result.flat();
   };
-  const discover = () => {
+  const discover = (required = true) => {
     const matches = pages(endpoint).filter(release => release.tag_name === tag);
-    assert.equal(matches.length, 1, 'Expected exactly one existing Rolling Release');
+    assert.ok(matches.length <= 1 && (!required || matches.length === 1), 'Expected exactly one existing Rolling Release');
     return matches[0];
   };
   const selected = discover();
@@ -41,7 +41,8 @@ export async function promoteMilestone({ tag, confirmation, sha },
     'cockpit-deployment.json', 'cockpit-deployment.json.sha256'].sort();
   async function inspect(prerelease) {
     checkRemoteTag(run, tag, sha);
-    assert.equal(discover().id, id, 'Release discovery changed');
+    const listed = discover(false);
+    if (listed) assert.equal(listed.id, id, 'Release discovery changed');
     const release = json([`${endpoint}/${id}`]);
     assert.equal(release.id, id);
     assert.equal(release.tag_name, tag);

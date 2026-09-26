@@ -72,6 +72,11 @@ move a tag, regenerate a version, or republish an already published Release.
 
 Use `gh api 'repos/waksana/cockpit-speech/releases?per_page=100' --paginate
 --slurp` for draft discovery, then `releases/{id}` and its paginated `/assets`.
+Once creation or initial discovery provides an ID, direct `releases/{id}`
+readback is authoritative: paginated lists can temporarily omit a newly created
+or updated Release. A missing list entry never replaces or recreates a known ID.
+Conflicting listed identities still fail closed, as do direct-ID read errors;
+no mutation is retried.
 Download with `releases/assets/{asset_id}` and
 `Accept: application/octet-stream`. The published-tag endpoint does not discover
 drafts. A complete unique exact-tag draft can be recovered only when all four
