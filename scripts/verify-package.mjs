@@ -2,10 +2,12 @@ import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
 import { execFileSync } from 'node:child_process';
 import { readFile, stat } from 'node:fs/promises';
-import { basename, resolve, join } from 'node:path';
+import { basename, dirname, resolve, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import ts from 'typescript';
 import { git, loadSdkIdentity, sameJson } from './build-identity.mjs';
+import { rollingTag } from './rolling-identity.mjs';
+import { deploymentManifest } from './deployment-manifest.mjs';
 
 function verifyImports(path, bytes) {
   const source = ts.createSourceFile(path, bytes.toString('utf8'), ts.ScriptTarget.Latest, true, ts.ScriptKind.JS);
@@ -23,7 +25,7 @@ function verifyImports(path, bytes) {
   visit(source);
 }
 
-export async function verifyPackage(root, archive, sourceSha = git(root, ['rev-parse', 'HEAD'])) {
+export async function verifyPackage(root, archive, sourceSha = git(root, ['rev-parse', 'HEAD']), version) {
   assert.match(sourceSha, /^[a-f0-9]{40}$/);
   assert.ok((await stat(archive)).size <= 32 * 1024 * 1024, 'Archive exceeds the host package limit');
   const sha256 = createHash('sha256').update(await readFile(archive)).digest('hex');
@@ -36,6 +38,10 @@ export async function verifyPackage(root, archive, sourceSha = git(root, ['rev-p
   const build = JSON.parse(read('module-build.json').toString('utf8'));
   const expectedManifest = JSON.parse(await readFile(join(root, 'cockpit.module.json'), 'utf8'));
   const metadata = JSON.parse(await readFile(join(root, 'package.json'), 'utf8'));
+  if (version) {
+    expectedManifest.version = version;
+    metadata.version = version;
+  }
   assert.ok(sameJson(manifest, expectedManifest), 'Archive manifest differs from this source');
   assert.equal(manifest.id, 'cockpit-speech');
   assert.equal(manifest.version, metadata.version);
@@ -51,6 +57,18 @@ export async function verifyPackage(root, archive, sourceSha = git(root, ['rev-p
   assert.ok(sameJson(build.sdk, await loadSdkIdentity(root)), 'Build used a different SDK package');
   assert.ok(Array.isArray(build.files));
   const expected = new Set(['module-build.json']);
+  const rolling = rollingTag.exec(`v${manifest.version}`);
+  if (rolling) {
+    assert.equal(read('dist/shared/version.js').toString('utf8'),
+      `export const version = ${JSON.stringify(manifest.version)};\n`, 'Runtime version differs from Rolling identity');
+    expected.add('cockpit-deployment.json');
+    const sidecar = await readFile(join(dirname(archive), 'cockpit-deployment.json'));
+    assert.deepEqual(read('cockpit-deployment.json'), sidecar, 'Embedded descriptor differs from sidecar bytes');
+    const digest = createHash('sha256').update(sidecar).digest('hex');
+    assert.equal(await readFile(join(dirname(archive), 'cockpit-deployment.json.sha256'), 'utf8'),
+      `${digest}  cockpit-deployment.json\n`, 'Descriptor checksum differs');
+    assert.deepEqual(JSON.parse(sidecar), await deploymentManifest(root, sourceSha, Number(rolling[1])));
+  }
   for (const file of build.files) {
     assert.equal(typeof file.path, 'string');
     assert.ok(file.path === 'cockpit.module.json' || file.path === 'LICENSE' || file.path.startsWith('dist/'));

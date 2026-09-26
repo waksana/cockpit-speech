@@ -4,9 +4,10 @@ import { readFile, readdir } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { verifyPackage } from './verify-package.mjs';
+import { rollingTag } from './rolling-identity.mjs';
 
 export function checkTagTarget(tag, sha, refs) {
-  assert.match(tag, /^v\d+\.\d+\.\d+$/);
+  assert.match(tag, /^v\d+\.\d+\.\d+(?:-rolling\.[1-9]\d*)?$/);
   const targets = new Map(refs.trim().split('\n').filter(Boolean).map(line => {
     const [target, ref, extra] = line.trim().split(/\s+/);
     assert.match(target, /^[a-f0-9]{40}$/);
@@ -18,18 +19,20 @@ export function checkTagTarget(tag, sha, refs) {
 }
 
 export async function checkRelease(root, tag, sha, directory) {
-  assert.match(tag, /^v\d+\.\d+\.\d+$/, 'Release tags use vMAJOR.MINOR.PATCH');
+  assert.match(tag, /^v\d+\.\d+\.\d+(?:-rolling\.[1-9]\d*)?$/, 'Invalid release tag');
   assert.match(sha, /^[a-f0-9]{40}$/, 'Release source must be an exact commit');
   const version = tag.slice(1);
   const metadata = JSON.parse(await readFile(join(root, 'package.json'), 'utf8'));
   const manifest = JSON.parse(await readFile(join(root, 'cockpit.module.json'), 'utf8'));
-  assert.equal(metadata.version, version, 'Tag and package version differ');
-  assert.equal(manifest.version, version, 'Tag and module version differ');
+  const rolling = rollingTag.test(tag);
+  assert.ok(metadata.version === version || (rolling && metadata.version === '0.0.0-dev'), 'Tag and package version differ');
+  assert.ok(manifest.version === version || (rolling && manifest.version === '0.0.0-dev'), 'Tag and module version differ');
   const notes = await readFile(join(root, 'docs/release-notes.md'), 'utf8');
-  assert.match(notes.split(/\r?\n/)[0], new RegExp(`^# Cockpit Speech ${version}(?: |$)`));
+  if (!rolling) assert.match(notes.split(/\r?\n/)[0], new RegExp(`^# Cockpit Speech ${version}(?: |$)`));
   const archive = `cockpit-speech-${version}.tgz`;
-  assert.deepEqual((await readdir(directory)).sort(), [archive, `${archive}.sha256`]);
-  const result = await verifyPackage(root, join(directory, archive), sha);
+  assert.deepEqual((await readdir(directory)).sort(), [archive, `${archive}.sha256`,
+    ...(rolling ? ['cockpit-deployment.json', 'cockpit-deployment.json.sha256'] : [])].sort());
+  const result = await verifyPackage(root, join(directory, archive), sha, rolling ? version : undefined);
   const host = JSON.parse(await readFile(join(root, 'tooling/host-compatibility.json'), 'utf8'));
   assert.equal(host.repository, 'waksana/cockpit');
   assert.match(host.commit, /^[a-f0-9]{40}$/);

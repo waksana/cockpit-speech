@@ -7,15 +7,16 @@ import { releaseFixture, commitFixture } from './test-support/release-fixture.mj
 import { sourceIdentity } from './build-identity.mjs';
 import { packageModule } from './package.mjs';
 
-test('release workflow preserves the verified archive behind a draft gate', async () => {
+test('Rolling workflow builds every exact merged PR independently and preserves the verified archive', async () => {
   const workflow = await readFile(new URL('../.github/workflows/release.yml', import.meta.url), 'utf8');
-  for (const text of ['uses: ./.github/workflows/build.yml', 'actions: read', 'check-release.mjs',
-    'node scripts/publish-release.mjs "$RELEASE_TAG" "$GITHUB_SHA" release-artifact']) {
+  for (const text of ['types: [closed]', 'github.event.pull_request.merged == true', 'actions: read',
+    'ref: ${{ github.event.pull_request.merge_commit_sha }}', 'node scripts/rolling.mjs publish',
+    'name: rolling-${{ github.run_number }}']) {
     assert.ok(workflow.includes(text), text);
   }
-  assert.ok(workflow.indexOf('check-release.mjs') < workflow.indexOf('publish-release.mjs'));
+  assert.ok(workflow.indexOf('rolling.mjs verify') < workflow.indexOf('rolling.mjs publish'));
   assert.doesNotMatch(workflow, /releases\/tags|gh release (?:edit|download|create)/);
-  assert.doesNotMatch(workflow, /--clobber|pnpm (?:build|package)|pull_request_target|secrets\./);
+  assert.doesNotMatch(workflow, /--clobber|secrets\.|^\s*(?:concurrency|paths|paths-ignore|tags|labels):/m);
   for (const [, use] of workflow.matchAll(/uses:\s+([^\s]+)/g)) {
     if (!use.startsWith('./')) assert.match(use, /^[\w/-]+@[a-f0-9]{40}$/);
   }

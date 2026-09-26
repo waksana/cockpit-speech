@@ -1,8 +1,9 @@
 import { spawnSync } from 'node:child_process';
-import { copyFile, mkdir, readdir, rm, writeFile } from 'node:fs/promises';
+import { copyFile, mkdir, readdir, rm, writeFile, readFile } from 'node:fs/promises';
 import { resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { sdkIdentity, sourceIdentity, writeBuildReceipt } from './build-identity.mjs';
+import { git, sdkIdentity, sourceIdentity, writeBuildReceipt } from './build-identity.mjs';
+import { displayVersion } from './rolling-identity.mjs';
 
 const root = fileURLToPath(new URL('..', import.meta.url));
 await sdkIdentity(root);
@@ -22,6 +23,10 @@ async function removeTests(directory) {
 }
 await removeTests(resolve(root, 'dist'));
 await writeFile(resolve(root, 'dist/package.json'), '{"type":"module"}\n');
+const metadata = JSON.parse(await readFile(resolve(root, 'package.json'), 'utf8'));
+const version = displayVersion(metadata.version, git(root, ['rev-parse', 'HEAD']));
+await writeFile(resolve(root, 'dist/shared/version.js'), `export const version = ${JSON.stringify(version)};\n`);
+console.log(`Building Cockpit Speech ${version}`);
 await mkdir(resolve(root, 'dist/web'), { recursive: true });
 await copyFile(resolve(root, 'src/web/styles.css'), resolve(root, 'dist/web/styles.css'));
 await mkdir(resolve(root, 'dist/licenses'), { recursive: true });

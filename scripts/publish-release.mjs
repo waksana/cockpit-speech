@@ -1,9 +1,11 @@
 import assert from 'node:assert/strict';
+import { createHash } from 'node:crypto';
 import { execFileSync } from 'node:child_process';
-import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
-import { tmpdir } from 'node:os';
+import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { rollingTag } from './rolling-identity.mjs';
+import { assetIdentity, publicationNotes } from './release-assets.mjs';
 
 const root = fileURLToPath(new URL('..', import.meta.url));
 const runGh = args => execFileSync('gh', args, { maxBuffer: 34 * 1024 * 1024, timeout: 120_000 });
@@ -11,12 +13,16 @@ const verifyArtifact = (tag, sha, directory) => execFileSync(process.execPath,
   [join(root, 'scripts/check-release.mjs'), tag, sha, directory],
   { cwd: root, stdio: 'pipe', timeout: 120_000 });
 
-export async function publishRelease({ repository, tag, sha, directory }, { run = runGh, verify = verifyArtifact } = {}) {
+export async function publishRelease({ repository, tag, sha, directory, notes: rollingNotes }, { run = runGh, verify = verifyArtifact } = {}) {
   assert.match(repository, /^[\w.-]+\/[\w.-]+$/);
-  assert.match(tag, /^v\d+\.\d+\.\d+$/);
+  assert.match(tag, /^v\d+\.\d+\.\d+(?:-rolling\.[1-9]\d*)?$/);
+  const rolling = rollingTag.test(tag);
+  if (rolling) assert.equal(typeof rollingNotes, 'string', 'Rolling requires complete PR notes');
+  let expectedNotes = rollingNotes;
   assert.match(sha, /^[a-f0-9]{40}$/);
   const archive = `cockpit-speech-${tag.slice(1)}.tgz`;
-  const names = [archive, `${archive}.sha256`].sort();
+  const names = [archive, `${archive}.sha256`,
+    ...(rolling ? ['cockpit-deployment.json', 'cockpit-deployment.json.sha256'] : [])].sort();
   const endpoint = `repos/${repository}/releases`;
   const json = args => JSON.parse(run(['api', ...args]).toString());
   const pages = path => {
@@ -45,7 +51,12 @@ export async function publishRelease({ repository, tag, sha, directory }, { run 
     assert.equal(release.id, id, 'Release ID changed');
     assert.equal(release.tag_name, tag, 'Release tag changed');
     assert.equal(release.draft, draft, 'Unexpected draft/published state');
-    assert.equal(release.prerelease, false, 'Prerelease is not a stable Release');
+    assert.equal(release.prerelease, rolling, 'Prerelease state differs');
+    if (rolling) {
+      assert.equal(release.target_commitish, sha, 'Release source changed');
+      assert.equal(release.name, `Cockpit Speech ${tag}`, 'Release title changed');
+      assert.equal(release.body, expectedNotes, 'Release notes changed');
+    }
     return release;
   };
   const assetsAt = id => {
@@ -57,17 +68,20 @@ export async function publishRelease({ repository, tag, sha, directory }, { run 
       assert.ok(Number.isSafeInteger(asset.size) && asset.size > 0 && asset.size <= 32 * 1024 * 1024, 'Invalid asset size');
       assert.equal(asset.state, 'uploaded', 'Asset upload is incomplete');
     }
-    return assets.sort((a, b) => a.name.localeCompare(b.name));
+    return assetIdentity(assets);
   };
   const inspect = async (id, draft) => {
     releaseAt(id, draft);
     const assets = assetsAt(id);
-    const downloaded = await mkdtemp(join(tmpdir(), 'cockpit-speech-release-'));
+    await mkdir(join(root, '.release-readback'), { recursive: true });
+    const downloaded = await mkdtemp(join(root, '.release-readback', 'publish-'));
     try {
       for (const asset of assets) {
         const bytes = run(['api', `${endpoint}/assets/${asset.id}`, '-H', 'Accept: application/octet-stream']);
         assert.equal(bytes.length, asset.size, 'Downloaded asset size differs');
         assert.deepEqual(bytes, await readFile(join(directory, asset.name)), 'Release asset bytes differ from the checked archive');
+        if (rolling) assert.equal(asset.digest, `sha256:${createHash('sha256').update(bytes).digest('hex')}`,
+          'GitHub asset upload digest differs');
         await writeFile(join(downloaded, asset.name), bytes, { flag: 'wx' });
       }
       await verify(tag, sha, downloaded);
@@ -82,13 +96,14 @@ export async function publishRelease({ repository, tag, sha, directory }, { run 
   if (release) {
     assert.equal(release.draft, true, `Release ${tag} is already published; refusing to mutate it`);
   } else {
-    const generated = json([`${endpoint}/generate-notes`, '--method', 'POST', '-f', `tag_name=${tag}`, '-f', `target_commitish=${sha}`]);
+    const generated = rolling ? { body: '' } : json([`${endpoint}/generate-notes`, '--method', 'POST', '-f', `tag_name=${tag}`, '-f', `target_commitish=${sha}`]);
     assert.equal(typeof generated.body, 'string', 'Invalid generated release notes');
     const notes = await readFile(join(root, 'docs/release-notes.md'), 'utf8');
     // gh release create retries uploads internally. Keep every write a single API request.
     const created = JSON.parse(mutate(['api', endpoint, '--method', 'POST',
-      '-f', `tag_name=${tag}`, '-f', `target_commitish=${sha}`, '-F', 'draft=true', '-F', 'prerelease=false',
-      '-f', `name=Cockpit Speech ${tag}`, '-f', `body=${notes}\n\n${generated.body}`]).toString());
+      '-f', `tag_name=${tag}`, '-f', `target_commitish=${sha}`, '-F', 'draft=true', '-F', `prerelease=${rolling}`,
+      '-f', 'make_latest=false',
+      '-f', `name=Cockpit Speech ${tag}`, '-f', `body=${rolling ? rollingNotes : `${notes}\n\n${generated.body}`}`]).toString());
     assert.ok(Number.isSafeInteger(created.id) && created.id > 0, 'Create returned no Release ID; inspect the unknown result before rerunning');
     release = discover();
     assert.equal(release?.id, created.id, 'Created draft discovery differs; inspect the unknown result before rerunning');
@@ -105,10 +120,12 @@ export async function publishRelease({ repository, tag, sha, directory }, { run 
   assert.equal(discover()?.id, id, 'Release discovery changed before publication');
   releaseAt(id, true);
   assert.deepEqual(assetsAt(id), assets, 'Release assets changed before publication');
+  expectedNotes = rolling ? publicationNotes(rollingNotes, id, tag, sha, assets) : undefined;
   mutate(['api', `${endpoint}/${id}`, '--method', 'PATCH',
-    '-F', 'draft=false', '-F', 'prerelease=false', '-f', 'make_latest=true']);
+    '-F', 'draft=false', '-F', `prerelease=${rolling}`, '-f', `make_latest=${!rolling}`,
+    ...(rolling ? ['-f', `body=${expectedNotes}`] : [])]);
   assert.equal(discover()?.id, id, 'Published Release discovery changed; inspect before retrying');
-  await inspect(id, false);
+  assert.deepEqual(await inspect(id, false), assets, 'Published asset identity changed');
   return { id, tag, status: 'published' };
 }
 

@@ -215,7 +215,7 @@ test('input middleware preserves native textarea props and keeps decision microp
         assert.notEqual(button.props['aria-label'], '取消语音输入');
         if (current === 'sending') {
           assert.equal(button.props['aria-label'], '正在发送');
-          assert.equal(button.props.title, '正在发送');
+          assert.equal(button.props.title, '正在发送 · Speech dev+unbuilt');
         }
         const icon = button.children[0] as Element;
         assert.equal(icon.type === 'span', busy);
@@ -241,7 +241,7 @@ test('input middleware preserves native textarea props and keeps decision microp
           const capped = Wrapped({ draft, operation, disabled: false, sendBlocked: false, value: '', onSubmit: nativeSubmit, onChange: nativeTextChange });
           const cappedButton = capped.children[1] as Element;
           assert.equal(cappedButton.props['aria-label'], '录音已达两分钟');
-          assert.equal(cappedButton.props.title, '录音已达两分钟');
+          assert.equal(cappedButton.props.title, '录音已达两分钟 · Speech dev+unbuilt');
           cleanupEffects();
           holdingAtLimit = false;
         }

@@ -3,12 +3,15 @@ import { execFileSync } from 'node:child_process';
 import { lstat, readdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { parse } from 'yaml';
+import { rollingSource } from './rolling-identity.mjs';
 
 export function git(root, args) {
   return execFileSync('git', args, { cwd: root, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] }).trim();
 }
 
 export function sourceIdentity(root, strict = false) {
+  const rolling = rollingSource(root);
+  if (rolling) return rolling.sourceSha;
   let sha;
   try { sha = git(root, ['rev-parse', '--verify', 'HEAD']); }
   catch {

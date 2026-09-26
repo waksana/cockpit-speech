@@ -3,5 +3,8 @@ dist/
 .module-build.json
 module-output*/
 .test-work/
+.rolling-build.json
+cockpit-deployment.json
+.release-readback/
 azure-speech.json
 *.log
