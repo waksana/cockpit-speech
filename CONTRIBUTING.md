@@ -1,8 +1,10 @@
 # Contributing to Cockpit Speech
 
 Use an isolated branch/worktree and synthetic fixtures. Follow the README's
+[worktree setup](README.md#worktree-setup),
 Node/pnpm, authenticated frozen-lockfile registry install and existing
 typecheck/test/build commands. Clean builds do not require host source.
+Plain documentation changes need no dependency install or product build.
 Do not use real recordings, credentials or production sessions for validation.
 
 ## Immutable installation versions
