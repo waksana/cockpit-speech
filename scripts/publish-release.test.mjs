@@ -1,8 +1,8 @@
 import assert from 'node:assert/strict';
+import { createHash } from 'node:crypto';
 import { execFile } from 'node:child_process';
 import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { createServer } from 'node:http';
-import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { test } from 'node:test';
 import { promisify } from 'node:util';
@@ -15,13 +15,23 @@ const endpoint = `repos/${repository}/releases`;
 const archive = 'cockpit-speech-0.9.3.tgz';
 
 async function fixture(t, overrides = {}) {
-  const directory = await mkdtemp(join(tmpdir(), 'speech-publish-test-'));
+  const rolling = overrides.rolling === true;
+  const tag = rolling ? 'v0.0.0-rolling.91' : 'v0.9.3';
+  const archive = `cockpit-speech-${tag.slice(1)}.tgz`;
+  const notes = 'Full PR title\n\nFull multiline PR body\nsecond line';
+  const directory = await mkdtemp(new URL('../node_modules/speech-publish-test-', import.meta.url));
   t.after(() => rm(directory, { recursive: true }));
   const bytes = new Map([[archive, Buffer.from('checked archive')], [`${archive}.sha256`, Buffer.from('checked checksum')]]);
+  if (rolling) {
+    bytes.set('cockpit-deployment.json', Buffer.from('checked descriptor'));
+    bytes.set('cockpit-deployment.json.sha256', Buffer.from('descriptor checksum'));
+  }
   for (const [name, content] of bytes) await writeFile(join(directory, name), content);
   const state = {
-    releases: [{ id: 42, tag_name: tag, draft: true, prerelease: false, target_commitish: 'main' }],
-    assets: [...bytes].map(([name, content], i) => ({ id: 10 + i, name, size: content.length, state: 'uploaded' })),
+    releases: [{ id: 42, tag_name: tag, draft: true, prerelease: rolling, target_commitish: rolling ? sha : 'main',
+      name: `Cockpit Speech ${tag}`, body: notes }],
+    assets: [...bytes].map(([name, content], i) => ({ id: 10 + i, name, size: content.length, state: 'uploaded',
+      digest: `sha256:${createHash('sha256').update(content).digest('hex')}` })),
     calls: [], verified: [], bytes: new Map(bytes),
     ...overrides,
   };
@@ -36,8 +46,9 @@ async function fixture(t, overrides = {}) {
     if (args[1] === `${endpoint}/generate-notes`) return response({ body: 'Generated notes' });
     if (args[1] === endpoint && args.includes('POST')) {
       assert.ok(args.includes(`tag_name=${tag}`) && args.includes(`target_commitish=${sha}`));
-      assert.ok(args.includes('draft=true') && args.includes('prerelease=false'));
-      state.releases.push({ id: 42, tag_name: tag, draft: true, prerelease: false, target_commitish: sha });
+      assert.ok(args.includes('draft=true') && args.includes(`prerelease=${rolling}`) && args.includes('make_latest=false'));
+      state.releases.push({ id: 42, tag_name: tag, draft: true, prerelease: rolling, target_commitish: sha,
+        name: `Cockpit Speech ${tag}`, body: notes });
       state.assets = [];
       if (state.createError) throw new Error('Create acknowledgement lost');
       return response(state.releases[0]);
@@ -47,15 +58,17 @@ async function fixture(t, overrides = {}) {
       const name = new URL(args[1]).searchParams.get('name');
       assert.equal(args[1], `https://uploads.github.com/${endpoint}/42/assets?name=${name}`);
       assert.equal(args[args.indexOf('--input') + 1], join(directory, name));
-      state.assets.push({ id: 10 + state.assets.length, name, size: bytes.get(name).length, state: 'uploaded' });
+      state.assets.push({ id: 10 + state.assets.length, name, size: bytes.get(name).length, state: 'uploaded',
+        digest: `sha256:${createHash('sha256').update(bytes.get(name)).digest('hex')}` });
       if (state.uploadError) throw new Error('Upload acknowledgement lost');
       return response(state.assets.at(-1));
     }
     assert.ok(!args[1].includes('/tags/'), 'Never use the published-tag endpoint');
     if (args.includes('PATCH')) {
       assert.equal(args[1], `${endpoint}/42`);
-      assert.ok(args.includes('draft=false') && args.includes('prerelease=false') && args.includes('make_latest=true'));
+      assert.ok(args.includes('draft=false') && args.includes(`prerelease=${rolling}`) && args.includes(`make_latest=${!rolling}`));
       state.releases.find(release => release.id === 42).draft = false;
+      if (rolling) state.releases[0].body = args.find(value => value.startsWith('body=')).slice(5);
       if (state.publishError) throw new Error('Publish acknowledgement lost');
       return response(state.releases[0]);
     }
@@ -71,6 +84,7 @@ async function fixture(t, overrides = {}) {
     const asset = state.assets.find(item => args[1] === `${endpoint}/assets/${item.id}`);
     assert.ok(asset, `Unexpected call: ${args}`);
     assert.deepEqual(args.slice(2), ['-H', 'Accept: application/octet-stream']);
+    asset.download_count = (asset.download_count ?? 0) + 1;
     return state.bytes.get(asset.name);
   };
   const verify = async (actualTag, actualSha, path) => {
@@ -82,11 +96,47 @@ async function fixture(t, overrides = {}) {
   };
   return {
     state, directory,
-    publish: () => publishRelease({ repository, tag, sha, directory }, { run, verify }),
+    publish: () => publishRelease({ repository, tag, sha, directory, notes: rolling ? notes : undefined }, { run, verify }),
     mutations: () => state.calls.filter(args => args.includes('PATCH')
       || (args.includes('POST') && !args[1].endsWith('/generate-notes'))),
   };
 }
+
+test('Rolling creates four assets then publishes verified prerelease without taking Latest', async t => {
+  const f = await fixture(t, { rolling: true, releases: [] });
+  await f.publish();
+  assert.equal(f.mutations().length, 6);
+  assert.equal(f.state.assets.length, 4);
+  assert.equal(f.state.releases[0].prerelease, true);
+  assert.equal(f.state.releases[0].draft, false);
+  assert.ok(f.mutations().at(-1).includes('make_latest=false'));
+  await assert.rejects(f.publish(), /already published/);
+  assert.equal(f.mutations().length, 6);
+});
+
+test('known-ID publication succeeds when paginated discovery omits the newly created or published release', async t => {
+  for (const rolling of [false, true]) {
+    const f = await fixture(t, { rolling, releases: [], intercept: args =>
+      args[1] === `${endpoint}?per_page=100` ? [[]] : undefined });
+    await f.publish();
+    assert.equal(f.mutations().length, rolling ? 6 : 4);
+    assert.equal(f.state.releases[0].draft, false);
+    assert.equal(f.state.verified.length, 3);
+    assert.ok(f.state.calls.some(args => args[1] === `${endpoint}/42`));
+  }
+});
+
+test('Rolling recovers only unchanged complete exact-source draft with complete PR notes', async t => {
+  const f = await fixture(t, { rolling: true });
+  await f.publish();
+  assert.equal(f.mutations().length, 1);
+  for (const key of ['target_commitish', 'name', 'body']) {
+    const invalid = await fixture(t, { rolling: true });
+    invalid.state.releases[0][key] = 'changed';
+    await assert.rejects(invalid.publish(), /changed/);
+    assert.equal(invalid.mutations().length, 0);
+  }
+});
 
 test('recovers the unique exact-tag complete draft across pages using only IDs', async t => {
   const f = await fixture(t);

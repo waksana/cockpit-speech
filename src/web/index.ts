@@ -1,6 +1,8 @@
 import type { ActivateFrontend, ComposerInputProps } from '@waksana/cockpit-module-sdk/frontend';
 import { createSpeechFrontend } from './frontend.ts';
 import { icons } from './icons.ts';
+import { version } from '../shared/version.ts';
+export { version };
 
 export { composeEditorRef } from './frontend.ts';
 
@@ -92,8 +94,8 @@ export const activate: ActivateFrontend = context => {
                       : retry ? `语音失败，点击重试。${state.error ?? ''}` : '开始语音输入';
         const button = h('button', {
           type: 'button', className: `ck-icon-button cockpit-speech-mic${retry ? ' ck-danger' : ''}`, disabled,
-          'aria-label': label, title: state.error ?? (state.phase === 'idle'
-            ? `${label}；空输入可在网页内按住 F8 说话，松开发送（无需聚焦输入框，Fn 由设备决定）` : label),
+          'aria-label': label, title: `${state.error ?? (state.phase === 'idle'
+            ? `${label}；空输入可在网页内按住 F8 说话，松开发送（无需聚焦输入框，Fn 由设备决定）` : label)} · Speech ${version}`,
           'aria-pressed': state.phase === 'recording', 'aria-busy': busy,
           onClick: onMicrophone,
         }, busy ? h('span', { className: 'cockpit-speech-spinner', 'aria-hidden': true })

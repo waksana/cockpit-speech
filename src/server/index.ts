@@ -3,6 +3,7 @@ import { MAX_JSON_BYTES, SpeechError } from '../shared/limits.ts';
 import { azureSessionIssuer, parseInput } from './azure.ts';
 import type { SessionIssuer } from './azure.ts';
 import { readConfig } from './config.ts';
+export { version } from '../shared/version.ts';
 
 export function activate(context: ModuleBackendContext, issuer: SessionIssuer = azureSessionIssuer()): ModuleBackend {
   const lifetime = new AbortController();

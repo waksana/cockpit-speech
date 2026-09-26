@@ -1,72 +1,122 @@
 # Releases
 
-Cockpit Speech Releases contain `cockpit-speech-X.Y.Z.tgz` and its matching
-`.sha256`, not an npm package or a source archive.
+## Rolling cutover
+
+The first merge containing the Rolling workflow is the cutover. Earlier tags and
+Releases remain untouched; old PRs are not replayed. Every subsequently closed,
+actually merged PR targeting `main` (feature/fix/docs/chore, no label or path
+filter) gets an independent attempt for `pull_request.merge_commit_sha`.
+Unmerged PRs publish nothing.
+The `pull_request_target: closed` trigger allows publication for merged fork
+PRs too; its mandatory merged gate and exact merge-SHA checkout never execute
+an unmerged contribution with the publication token.
 
 <a id="automated-release-procedure"></a>
 ## Automated release procedure
 
-1. Prepare the version and current `docs/release-notes.md` through a pull request.
-2. Merge it and confirm Required checks passed for that exact `main` SHA.
-3. Create and push an annotated immutable `vX.Y.Z` tag at that SHA.
-4. The Release workflow runs the native checks on the tag SHA and downloads that
-   run's original archive. The publish job never rebuilds or repackages it.
-5. `scripts/check-release.mjs` verifies main ancestry, the remote tag target,
-   version, release notes, source/manifest/checksum, SDK identity and the pinned
-   host compatibility identity.
-6. `scripts/publish-release.mjs` enumerates all authenticated Release pages and
-   selects the unique exact `tag_name`. When absent, it stages both assets in a
-   new draft. When a complete draft already exists, it verifies and reuses it
-   without uploading, deleting or replacing assets.
-7. It reads the draft by Release ID and all assets by paginated asset IDs,
-   downloads both assets and requires byte-for-byte identity with the checked
-   archive/checksum, then repeats the source/tag/package checks. After checking
-   uniqueness, draft state and unchanged assets again, it publishes that ID as a
-   non-prerelease Latest Release and verifies the published state and bytes.
+`.github/workflows/release.yml`, named **Rolling**, is the permanent sequence
+authority. Do not rename, delete/recreate, or reset it. `github.run_number`
+produces `0.0.0-rolling.N` and tag `v0.0.0-rolling.N`; reruns retain N and the
+original event source. Gaps are valid. Completion time and Release timestamps
+are **not** ordering: consumers choose greater sequence numbers only, so a
+slow older build never supersedes a newer candidate. Failed attempts neither
+cancel nor block later merges. There is deliberately no concurrency group:
+GitHub can discard pending runs even with `cancel-in-progress: false`.
 
-Tags, Releases, versions and assets are immutable. The workflow refuses an
-already published Release and never uses clobber. A Release does not install, deploy,
-restart, migrate data or grant microphone/provider access.
+Main keeps package and module versions at `0.0.0-dev`. The exact merge SHA is
+checked out in an isolated runner, tested, then only the two version fields are
+deterministically injected. The build receipt and package verifier reject any
+other source changes. No generated changes are pushed to main. Development
+builds expose `dev+<8-character-SHA>` through backend/frontend version exports,
+the microphone tooltip and the build log; Rolling uses the generated version.
+
+The built archive is uploaded once as `rolling-N`; publication downloads that
+same artifact without rebuilding, validates it, creates an immutable lightweight
+tag with one HTTPS request, then creates one draft. Each Release has exactly:
+
+- `cockpit-speech-0.0.0-rolling.N.tgz`
+- `cockpit-speech-0.0.0-rolling.N.tgz.sha256`
+- `cockpit-deployment.json`
+- `cockpit-deployment.json.sha256`
+
+The format-2 `channel: rolling` descriptor binds repository, tag, exact source,
+version, sequence, archive name and module product. It is embedded at the
+archive root **byte-for-byte** equal to the sidecar. Its checksum is independent;
+the archive checksum is only a separate asset, never a self-referential
+descriptor field. The module product derives API min/max from the actual module
+manifest and capability vocabulary from frontend activation guards. Speech uses
+no host intents and owns no databases/migrations: the backend only reads
+`azure-openai.json`. This does not authorize deleting or rewriting that config.
+The previous host commit pin is historical test-pairing evidence, not a new
+version-by-version deployment catalog or an automatic compatibility selector.
+
+The full corresponding PR title/body is copied into Release notes along with
+source/version/sequence and both checksums. The final publication write appends
+a machine-readable original Release/asset ID, size and digest baseline to those
+notes; later promotion must match it, not adopt replacement uploads as original.
+Mutable download counters are excluded from identity comparisons.
+After exact-ID asset download,
+checksum, package inventory, embedded descriptor, SDK and tag/source readback,
+the draft becomes a non-draft **prerelease**, `make_latest=false`.
+Only successful final readback establishes Rolling publication.
 
 <a id="atomic-release-publication"></a>
-## Failure and unknown-result recovery
+## Immutable publication and recovery
 
-Only a formal, non-draft, non-prerelease Release with both verified assets is a
-readiness signal. If creation, upload, publication or final readback fails or has
-an unknown result, inspect the remote tag, draft/Release and assets first. Keep a
-partial draft for diagnosis. Do not blindly retry a mutation, move the tag, delete
-or replace a published Release, or publish changed bytes under the same version.
+Tag/create/upload/publish are individual `gh api` HTTPS writes with no retry.
+Never substitute `gh release create` with asset arguments: it retries uploads.
+Unknown outcomes stop immediately. Read failures do not establish absence.
+Inspect authenticated paginated Releases, exact refs and asset IDs before any
+separately authorized rerun; never delete a partial draft, replace assets,
+move a tag, regenerate a version, or republish an already published Release.
 
-Use authenticated, paginated `gh api
-"repos/waksana/cockpit-speech/releases?per_page=100" --paginate --slurp` to discover
-drafts; the `releases/tags/{tag}` endpoint is not a draft discovery mechanism.
-Filter all pages by exact `tag_name`, then inspect
-`repos/waksana/cockpit-speech/releases/{release_id}` and its paginated `/assets`.
-Asset downloads use `releases/assets/{asset_id}` with
-`Accept: application/octet-stream`, not tag-based download commands.
+Use `gh api 'repos/waksana/cockpit-speech/releases?per_page=100' --paginate
+--slurp` for draft discovery, then `releases/{id}` and its paginated `/assets`.
+Once creation or initial discovery provides an ID, direct `releases/{id}`
+readback is authoritative: paginated lists can temporarily omit a newly created
+or updated Release. A missing list entry never replaces or recreates a known ID.
+Conflicting listed identities still fail closed, as do direct-ID read errors;
+no mutation is retried.
+Download with `releases/assets/{asset_id}` and
+`Accept: application/octet-stream`. The published-tag endpoint does not discover
+drafts. A complete unique exact-tag draft can be recovered only when all four
+assets and Release notes/source match the original checked artifact.
 
-An explicitly authorized rerun can recover **one complete matching draft**.
-Branch-valued `target_commitish` on an older draft is not source proof: the
-immutable remote tag target, archive build source SHA, version, SDK/host identity
-and exact checked bytes must all pass instead. New drafts also record the exact
-source SHA as their target.
+After explicitly resolving an uncertain result, rerunning **failed jobs** can
+reuse retained `rolling-N` Actions bytes. Rerunning all jobs cannot overwrite an
+existing artifact; an expired/missing artifact or partial draft needs operator
+inspection, not rebuilding replacement assets. Build failures before upload
+may rerun at the same sequence. The workflow never automatically repairs or
+retries uncertain writes. Historical stable releases keep their original rules.
 
-No matches after a successful full enumeration permits creation. Lookup errors,
-malformed responses, multiple exact-tag matches (including draft/published
-conflicts), prereleases, incomplete/extra/duplicate assets, changed tags or bytes,
-and an already published Release all stop without changing the existing Release.
-After a failed or uncertain create/upload/publish, the script stops and never
-retries a mutation. A failed readback is not proof that the write failed: inspect
-the recorded ID and all exact-tag matches before deciding whether to rerun.
-Incomplete drafts require diagnosis and a separate authorized resolution; this
-workflow never repairs them by uploading replacement or missing assets.
+## Explicit Milestone promotion
 
-Creation, each upload and publication use individual `gh api` requests. Do not
-replace them with `gh release create` asset arguments: that command retries
-uploads internally, including requests whose remote result may be unknown.
-The release regression tests require GitHub CLI (`gh`, available on the CI
-runner) and use only synthetic fixtures and a loopback HTTP server to assert
-single-request behavior on HTTP failures and dropped connections.
+From `main`, dispatch **Milestone** (`.github/workflows/milestone.yml`) with
+`tag` and `confirmation` both set to the same user-selected existing successful
+Rolling tag. The workflow rejects non-Rolling names before checkout.
+It checks out the selected source for verification only: no build or packaging.
+It requires a unique non-draft prerelease, its recorded original publication
+identity and checksums, the immutable tag/source, all four
+uploaded assets, each GitHub SHA-256 upload digest, both checksum files,
+descriptor/schema/source/version, archive inventory and embedded byte equality.
+It repeats identity checks immediately before the sole write.
 
-After a joint deployment with the host, follow Cockpit's
-[release-after-acceptance policy](https://github.com/waksana/cockpit/blob/main/docs/releasing.md#release-after-acceptance).
+That write only changes the **original Release ID** to `prerelease=false` and
+`make_latest=true`. No tag, title, body, source, version or asset is changed.
+Afterward, all identities/bytes and the Latest endpoint must agree. A failed or
+uncertain write is not retried. Selecting or promoting a Milestone is never
+inferred from newest completion, and publishing this workflow does not select one.
+
+## Verification and deployment
+
+Run `pnpm typecheck`, `pnpm test`, `pnpm build`, `pnpm package` and
+`pnpm verify:package module-output/cockpit-speech-0.0.0-dev.tgz` on clean
+committed source. Existing tests exercise per-merge identity, ordering,
+isolation, packaging, unknown writes, complete draft recovery and invariant
+promotion. Tests use synthetic local fixtures and GitHub CLI, never live writes.
+
+Merged, Rolling released, Milestone promoted and externally deployed are four
+different outcomes. The external deployment service independently selects
+compatible increasing sequences and owns installation, migration, restart and
+recovery. A Release is not proof of deployment; no repository workflow contacts
+that service.

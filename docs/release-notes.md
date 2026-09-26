@@ -1,4 +1,11 @@
-# Cockpit Speech 0.9.3 (source preparation)
+# Cockpit Speech development
+
+Main remains `0.0.0-dev`; merged PRs now generate immutable Rolling versions
+and verified deployment descriptors. See [Releases](releases.md) for the cutover,
+single-attempt publication recovery and explicitly selected in-place Milestones.
+Release notes for each Rolling contain that PR's complete title and body.
+
+## Historical: 0.9.3 (source preparation)
 
 Replaces the generated local SDK and host export preparation with the exact
 `@waksana/cockpit-module-sdk@0.2.0` GitHub Packages dependency. Backend/frontend

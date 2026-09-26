@@ -1,27 +1,50 @@
-name: Release
+name: Rolling
+# This workflow path/name and its run_number are the permanent sequence authority.
 on:
-  push:
-    tags: ['v*']
+  pull_request_target:
+    branches: [main]
+    types: [closed]
 
 permissions:
   contents: read
   packages: read
 
-concurrency:
-  group: release-${{ github.ref }}
-  cancel-in-progress: false
-
+# No concurrency group: even cancel-in-progress:false may discard pending runs.
 jobs:
-  checks:
-    uses: ./.github/workflows/build.yml
-    permissions:
-      contents: read
-      packages: read
-
-  publish:
-    needs: checks
+  build:
+    # Closed + merged only: never execute unmerged fork code with a privileged token.
+    if: github.event.pull_request.merged == true
     runs-on: ubuntu-24.04
-    timeout-minutes: 10
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
+        with:
+          ref: ${{ github.event.pull_request.merge_commit_sha }}
+          persist-credentials: false
+      - uses: pnpm/action-setup@f40ffcd9367d9f12939873eb1018b921a783ffaa
+        with:
+          version: 10.34.5
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38
+        with:
+          node-version-file: .node-version
+          registry-url: https://npm.pkg.github.com
+          scope: '@waksana'
+      - run: pnpm install --frozen-lockfile --ignore-scripts
+        env:
+          NODE_AUTH_TOKEN: ${{ github.token }}
+      - run: pnpm typecheck && pnpm test
+      - run: node scripts/rolling.mjs prepare
+      - run: pnpm build && pnpm package && node scripts/rolling.mjs verify
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: rolling-${{ github.run_number }}
+          path: module-output/*
+          if-no-files-found: error
+          retention-days: 7
+  publish:
+    needs: build
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
     permissions:
       contents: write
       actions: read
@@ -29,7 +52,7 @@ jobs:
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
         with:
-          ref: ${{ github.sha }}
+          ref: ${{ github.event.pull_request.merge_commit_sha }}
           fetch-depth: 0
           persist-credentials: false
       - uses: pnpm/action-setup@f40ffcd9367d9f12939873eb1018b921a783ffaa
@@ -45,14 +68,8 @@ jobs:
           NODE_AUTH_TOKEN: ${{ github.token }}
       - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
         with:
-          name: cockpit-speech-${{ github.sha }}-linux-x64
+          name: rolling-${{ github.run_number }}
           path: release-artifact
-      - name: Verify source, tag and downloaded archive
-        env:
-          RELEASE_TAG: ${{ github.ref_name }}
-        run: node scripts/check-release.mjs "$RELEASE_TAG" "$GITHUB_SHA" release-artifact
-      - name: Discover, verify and publish the complete draft
+      - run: node scripts/rolling.mjs publish
         env:
           GH_TOKEN: ${{ github.token }}
-          RELEASE_TAG: ${{ github.ref_name }}
-        run: node scripts/publish-release.mjs "$RELEASE_TAG" "$GITHUB_SHA" release-artifact

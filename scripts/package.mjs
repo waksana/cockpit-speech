@@ -5,6 +5,8 @@ import { spawnSync } from 'node:child_process';
 import { resolve, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { checkedBuild } from './build-identity.mjs';
+import { rollingSource } from './rolling-identity.mjs';
+import { deploymentManifest } from './deployment-manifest.mjs';
 
 async function regularTree(directory) {
   if (!(await lstat(directory)).isDirectory()) throw new Error(`Not a build directory: ${directory}`);
@@ -32,24 +34,38 @@ export async function packageModule(root, output) {
   await regularTree(join(root, 'dist'));
   if (!(await lstat(join(root, 'LICENSE'))).isFile()) throw new Error('Missing module license');
   await checkedBuild(root);
+  const rolling = rollingSource(root);
+  const descriptor = rolling
+    ? Buffer.from(JSON.stringify(await deploymentManifest(root, rolling.sourceSha, rolling.sequence), null, 2) + '\n') : null;
+  if (descriptor) await writeFile(join(root, 'cockpit-deployment.json'), descriptor);
   await mkdir(output);
   const name = `${manifest.id}-${manifest.version}.tgz`;
   const archive = join(output, name);
   try {
     const result = spawnSync('tar', ['--sort=name', '--mtime=@0', '--owner=0', '--group=0', '--numeric-owner',
       '--hard-dereference', '--transform=s/^\\.module-build\\.json$/module-build.json/',
-      '-czf', archive, 'cockpit.module.json', 'dist', 'LICENSE', '.module-build.json'], { cwd: root, stdio: 'pipe' });
+      '-czf', archive, 'cockpit.module.json', 'dist', 'LICENSE', '.module-build.json',
+      ...(descriptor ? ['cockpit-deployment.json'] : [])], { cwd: root, stdio: 'pipe' });
     if (result.error) throw result.error;
     if (result.status !== 0) throw new Error(`tar failed (${result.status}): ${result.stderr.toString()}`);
     await checkedBuild(root);
     const hash = createHash('sha256');
     for await (const bytes of createReadStream(archive)) hash.update(bytes);
     await writeFile(`${archive}.sha256`, `${hash.digest('hex')}  ${name}\n`, { flag: 'wx' });
+    if (descriptor) {
+      await writeFile(join(output, 'cockpit-deployment.json'), descriptor, { flag: 'wx' });
+      await writeFile(join(output, 'cockpit-deployment.json.sha256'),
+        `${createHash('sha256').update(descriptor).digest('hex')}  cockpit-deployment.json\n`, { flag: 'wx' });
+    }
     return archive;
   } catch (error) {
     try {
       await rm(`${archive}.sha256`, { force: true });
       await rm(archive, { force: true });
+      if (descriptor) {
+        await rm(join(output, 'cockpit-deployment.json'), { force: true });
+        await rm(join(output, 'cockpit-deployment.json.sha256'), { force: true });
+      }
       await rmdir(output);
     } catch (cleanup) { throw new AggregateError([error, cleanup], 'Packaging failed and output cleanup failed'); }
     throw error;

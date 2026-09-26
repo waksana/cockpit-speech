@@ -2,9 +2,12 @@
 
 The current source builds with the published
 `@waksana/cockpit-module-sdk@0.2.0` from GitHub Packages. Its exact supported
-host pairing is Cockpit commit `7d69b6f348e17f098bc5562fdbec317e8e2e4ba6`,
+historical tested host pairing is Cockpit commit `7d69b6f348e17f098bc5562fdbec317e8e2e4ba6`,
 recorded separately in `tooling/host-compatibility.json`.
 SDK semver is not a host compatibility check.
+Current Rolling packages carry source-derived API and capability requirements;
+see [Releases](docs/releases.md). Main stays `0.0.0-dev`, with development
+builds displaying `dev+<shortSHA>`.
 Recovery UI consumes public `ck-surface` and `ck-actions`; activation requires
 both `context.uiVersion === 1` and `context.uiSurfaceVersion === 1` before
 registering contributions. Missing/unsupported surface capability is rejected.
@@ -127,7 +130,7 @@ Focused or nonempty inputs keep native editing. To paste into an empty unfocused
 input, tap first, then use native long-press paste. Keyboard Tab still focuses
 the real textarea; the gesture layer adds no tab stop. The independent microphone
 button remains the accessible alternative and retains its existing behavior.
-Speech 0.9.3 requires the paired host's `draftLifecycleVersion: 1` and
+Speech requires the host's `draftLifecycleVersion: 1` and
 `draftSubmissionVersion: 1` capabilities
 as well as Cockpit's additive public UI classes. It uses the
 existing `composerEditor` middleware for the full-width status row and leaves
@@ -424,8 +427,8 @@ pnpm typecheck
 pnpm test
 pnpm build
 # After committing clean source; use a new output directory.
-node scripts/package.mjs module-output-0.9.3
-node scripts/verify-package.mjs module-output-0.9.3/cockpit-speech-0.9.3.tgz
+node scripts/package.mjs module-output-dev
+node scripts/verify-package.mjs module-output-dev/cockpit-speech-0.0.0-dev.tgz
 ```
 
 Archives contain runtime code, worklet assets, licenses and exact source/SDK
@@ -437,11 +440,12 @@ installed optional React peer stays in the development dependency tree, not the
 archive. SDK backend/frontend types use `/backend` and `/frontend`; common and
 runtime-only consumers use the root and `/runtime` public entries respectively.
 
-Current source assigns the fresh patch identity 0.9.3 to this compatible SDK
-migration, without changing capture, provider or draft behavior. An authorized
-joint deployment must preserve the original successful main CI archive, including
-its tar modes and digest; local rebuilds are not substitutes. Never replace an
-existing 0.9.2 installation's bytes. These commands do not publish or deploy.
+These commands build a development package, not a production release candidate.
+Every actual main PR merge automatically attempts an immutable Rolling Release
+at the exact merge SHA. A separately selected Milestone only promotes an existing
+Rolling in place. Deployment uses verified release bytes, never local rebuilds
+or replacement bytes under an existing version. See the canonical
+[release procedure](docs/releases.md); these local commands do not publish or deploy.
 See [development](docs/development.md),
 [release notes](docs/release-notes.md), [provenance](NOTICE.md) and
 [security](SECURITY.md).
