@@ -28,4 +28,7 @@ existing scripts/CI. Never delete installed module directories or force a bypass
 to reuse a version. PR merge is not authorization to tag, publish a Release,
 install, deploy or restart; those boundaries need separate authorization.
 
+Follow the canonical [release procedure](docs/releases.md#automated-release-procedure)
+for separately authorized publication.
+
 After a joint deployment with the host, tag and release the accepted commit per Cockpit's [release after a joint deployment](https://github.com/waksana/cockpit/blob/main/docs/releasing.md#release-after-acceptance) policy.
