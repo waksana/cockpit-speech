@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { test, type TestContext } from 'node:test';
-import type { DraftPurpose, DraftSendResult, HostSnapshot, ModuleDraft, ModuleDraftSnapshot } from '@waksana/cockpit-module-sdk/frontend';
+import type { DraftPurpose, DraftSendResult, ModuleDraft, ModuleDraftSnapshot } from '@waksana/cockpit-module-sdk/frontend';
 import { SpeechError } from '../shared/limits.ts';
 import type { Recording } from './recorder.ts';
 import { SpeechService } from './speech.ts';
@@ -26,20 +26,24 @@ function store<T>(initial: T) {
 const turn = () => new Promise<void>(resolve => setImmediate(resolve));
 
 function fixture(t: TestContext) {
-  const host = store<HostSnapshot>({ sessionId: 'original-session', visible: true, connected: true });
-  const requests: { id: string; sessionId: string; purpose: DraftPurpose; text: string; attachment: string }[] = [];
-  function owner(id: string, sessionId = 'original-session', purpose: DraftPurpose = { kind: 'prompt' }) {
-    const state = store<ModuleDraftSnapshot>({ text: '', revision: 0, pending: false, unconfirmed: false,
+  const requests: { id: string; route: string; purpose: DraftPurpose; text: string; attachment: string }[] = [];
+  function owner(id: string, route = 'original-session', purpose: DraftPurpose = { kind: 'prompt' }) {
+    const state = store<ModuleDraftSnapshot>({ text: '', revision: 0, actionRevision: 0, editable: true, submittable: true,
+      capabilities: { attachments: true }, pending: false, unconfirmed: false,
       retired: false, hasContent: false, blocks: [] });
     const reply = deferred<DraftSendResult>();
     let captures = 0, sendCalls = 0, lease = 0, fieldRevision = 0, attachment = '';
     let captureError = false;
+    let revoked = false;
     const draft: ModuleDraft = {
-      id, sessionId, purpose, subscribe: state.subscribe, getSnapshot: state.getSnapshot,
-      editText(text) { state.set({ ...state.getSnapshot(), text, revision: state.getSnapshot().revision + 1, hasContent: !!text || !!attachment }); },
+      id, purpose, subscribe: state.subscribe, getSnapshot: state.getSnapshot,
+      editText(text) {
+        if (revoked || !state.getSnapshot().editable) throw new Error('Owner is not editable');
+        state.set({ ...state.getSnapshot(), text, revision: state.getSnapshot().revision + 1, hasContent: !!text || !!attachment });
+      },
       editTextIfRevision(text, revision) {
         const value = state.getSnapshot();
-        if (value.retired) throw new Error('Retired');
+        if (revoked || value.retired || !value.editable) throw new Error('Owner is not editable');
         if (value.revision !== revision || value.pending || value.unconfirmed || value.blocks.length) return false;
         this.editText(text); return true;
       },
@@ -50,8 +54,9 @@ function fixture(t: TestContext) {
       },
       captureSend() {
         captures++;
-        if (captureError) throw new Error('No host authorization');
+        if (revoked || captureError) throw new Error('No host authorization');
         const capturedFields = fieldRevision;
+        const capturedAction = state.getSnapshot().actionRevision;
         let sent: Promise<DraftSendResult> | undefined;
         let cancelled = false;
         return {
@@ -60,11 +65,11 @@ function fixture(t: TestContext) {
             sendCalls++;
             if (sent) return sent;
             const value = state.getSnapshot();
-            if (cancelled || value.retired || value.pending || value.unconfirmed || value.blocks.length
-              || value.revision !== revision || capturedFields !== fieldRevision) {
+            if (revoked || cancelled || value.retired || !value.editable || !value.submittable || value.pending || value.unconfirmed || value.blocks.length
+              || value.revision !== revision || capturedFields !== fieldRevision || capturedAction !== value.actionRevision) {
               return sent = Promise.resolve({ status: 'blocked', reason: 'draft-changed' });
             }
-            requests.push({ id, sessionId, purpose, text: value.text, attachment });
+            requests.push({ id, route, purpose, text: value.text, attachment });
             state.set({ ...value, pending: true });
             return sent = reply.promise.then(result => {
               const latest = state.getSnapshot();
@@ -77,7 +82,9 @@ function fixture(t: TestContext) {
       },
     };
     const value = { draft, state, reply, captures: () => captures, sendCalls: () => sendCalls,
+      revoke: () => { revoked = true; },
       denyCapture: () => { captureError = true; },
+      replaceSchema: () => { fieldRevision++; },
       attach: (next: string) => { attachment = next; fieldRevision++; state.set({ ...state.getSnapshot(), hasContent: !!next || !!state.getSnapshot().text }); } };
     return value;
   }
@@ -85,9 +92,9 @@ function fixture(t: TestContext) {
     permission: ReturnType<typeof deferred<Recording>>; recording: Recording; stops: number; retries: number;
     text(value: string): void; fail(error: SpeechError): void; limit(): void }[] = [];
   let waitPermission = false;
+  const controller = new AbortController();
   const service = new SpeechService({
-    signal: new AbortController().signal, host,
-    chatWindow: { getSnapshot: () => ({ sessionId: null, status: 'unavailable', hasMore: false, partial: false, messages: [] }), subscribe: () => () => {} },
+    signal: controller.signal,
     session: async () => { throw new Error('No real network'); }, report: () => assert.fail('No global notification'),
     prepare(signal, fail, limit) {
       const take = { signal, fail, limit, stop: deferred<string>(), retry: deferred<string>(),
@@ -104,14 +111,25 @@ function fixture(t: TestContext) {
       } };
     },
   });
+  let selected: string | undefined;
+  const surfaces = new Set<string>();
+  const register = (value: ReturnType<typeof owner>) => {
+    surfaces.add(value.draft.id);
+    service.setTarget({ draft: value.draft, available: () => surfaces.has(value.draft.id), disabled: false, sendBlocked: false, selection: () => ({ start: 0, end: 0 }) });
+  };
+  const hide = (id = selected!) => {
+    surfaces.delete(id);
+    service.clearTarget(id);
+  };
   const select = (value: ReturnType<typeof owner>) => {
-    host.set({ ...host.getSnapshot(), sessionId: value.draft.sessionId });
-    service.setTarget({ draft: value.draft, disabled: false, sendBlocked: false, selection: () => ({ start: 0, end: 0 }) });
+    if (selected) hide(selected);
+    selected = value.draft.id;
+    register(value);
   };
   const original = owner('original');
   select(original);
   t.after(() => service.dispose());
-  return { service, host, requests, takes, original, owner, select, waitPermission: () => { waitPermission = true; } };
+  return { service, controller, surfaces, register, hide, requests, takes, original, owner, select, waitPermission: () => { waitPermission = true; } };
 }
 
 test('active hold release submits the original full draft once, not individual VAD turns', async t => {
@@ -131,7 +149,7 @@ test('active hold release submits the original full draft once, not individual V
     assert.equal(f.requests.length, 0);
     take.stop.resolve('complete transcript'); await turn();
     assert.equal(f.service.getSnapshot().phase, 'sending');
-    assert.deepEqual(f.requests, [{ id: 'purpose-input', sessionId: 'original-session', purpose, text: 'complete transcript', attachment: 'existing-attachment' }]);
+    assert.deepEqual(f.requests, [{ id: 'purpose-input', route: 'original-session', purpose, text: 'complete transcript', attachment: 'existing-attachment' }]);
     assert.equal(take.signal.aborted, false, 'audio remains until native acknowledgement');
     take.text('late'); take.fail(new SpeechError('AUDIO_FAILED', 'late failure'));
     assert.equal(f.service.getSnapshot().phase, 'sending');
@@ -152,7 +170,7 @@ test('send intent survives session/tab/ask navigation only when interruption fol
       const release = afterRelease ? f.service.releaseHold() : undefined;
       const other = f.owner('other', cause === 'session' ? 'other-session' : 'original-session', { kind: 'ask', requestId: 'new-ask' });
       if (cause === 'session' || cause === 'ask') f.select(other);
-      if (cause === 'hidden') f.host.set({ ...f.host.getSnapshot(), visible: false });
+      if (cause === 'hidden') f.hide();
       if (cause === 'unmount') f.service.clearTarget('original');
       await f.service.releaseHold('original');
       take.stop.resolve('original message'); await turn();
@@ -160,7 +178,7 @@ test('send intent survives session/tab/ask navigation only when interruption fol
       if (afterRelease) {
         assert.equal(f.requests[0]!.id, 'original');
         assert.equal(f.requests[0]!.purpose.kind, 'prompt', 'a later ask cannot turn a prompt into an answer');
-        assert.equal(f.requests[0]!.sessionId, 'original-session');
+        assert.equal(f.requests[0]!.route, 'original-session');
         f.original.reply.resolve({ status: 'acknowledged' }); await release;
       } else assert.equal(f.original.draft.getSnapshot().text, 'original message');
       assert.equal(other.draft.getSnapshot().text, '');
@@ -195,7 +213,7 @@ test('post-release view gates do not replace captured native send authority', as
   take.limit();
   assert.equal(f.service.getSnapshot().holdingAtLimit, true);
   const release = f.service.releaseHold();
-  f.service.setTarget({ draft: f.original.draft, disabled: true, sendBlocked: true, selection: () => ({ start: 0, end: 0 }) });
+  f.service.setTarget({ draft: f.original.draft, available: () => true, disabled: true, sendBlocked: true, selection: () => ({ start: 0, end: 0 }) });
   take.text('late original transcript');
   take.stop.resolve('late original transcript'); await turn();
   assert.equal(f.requests.length, 1);
@@ -243,6 +261,171 @@ test('independent prompt and ask releases in one session keep separate native pu
   f.original.reply.resolve({ status: 'unconfirmed', reason: 'native-unconfirmed' }); await promptRelease;
   assert.equal(f.service.getSnapshot('original').phase, 'send-error');
   assert.equal(f.service.getSnapshot('answer').phase, 'idle');
+});
+
+test('concurrently registered Chat and generic owners without session IDs keep independent dispatch and settlement', async t => {
+  const f = fixture(t);
+  const generic = f.owner('generic-comment', 'issue:42/comment', { kind: 'prompt' });
+  f.register(generic);
+  assert.equal('sessionId' in f.original.draft, false);
+  assert.equal('sessionId' in generic.draft, false);
+  assert.equal(f.service.canStart(), false, 'multiple surfaces require an explicit owner ID');
+  await f.service.start('hold');
+  assert.equal(f.takes.length, 0);
+  assert.equal(f.service.canStart('original'), true);
+  assert.equal(f.service.canStart('generic-comment'), true);
+
+  await f.service.start('hold', 'original');
+  assert.equal(f.service.canStart('generic-comment'), false, 'capture remains exclusive across surfaces');
+  const chatRelease = f.service.releaseHold('original');
+  await f.service.start('hold', 'generic-comment');
+  const genericRelease = f.service.releaseHold('generic-comment');
+  f.takes[1]!.stop.resolve('generic words');
+  await turn();
+  f.takes[0]!.text('late Chat partial');
+  assert.equal(generic.draft.getSnapshot().text, 'generic words');
+  f.takes[0]!.stop.resolve('Chat final');
+  await turn();
+  assert.deepEqual(f.requests.map(({ id, route, text }) => ({ id, route, text })), [
+    { id: 'generic-comment', route: 'issue:42/comment', text: 'generic words' },
+    { id: 'original', route: 'original-session', text: 'Chat final' },
+  ]);
+  generic.reply.resolve({ status: 'acknowledged' });
+  await genericRelease;
+  assert.equal(generic.draft.getSnapshot().text, '');
+  assert.equal(f.service.getSnapshot('original').phase, 'sending');
+  f.takes[1]!.text('late generic transcript');
+  f.original.reply.resolve({ status: 'unconfirmed', reason: 'transport-unconfirmed' });
+  await chatRelease;
+  assert.equal(f.service.getSnapshot('original').sendOutcome, 'unconfirmed');
+  assert.equal(f.service.getSnapshot('generic-comment').phase, 'idle');
+  assert.equal(f.original.draft.getSnapshot().text, 'Chat final');
+  assert.equal(generic.draft.getSnapshot().text, '');
+  assert.equal(f.original.captures(), 1);
+  assert.equal(generic.captures(), 1);
+  assert.equal(f.original.sendCalls(), 1);
+  assert.equal(generic.sendCalls(), 1);
+});
+
+test('registering or refreshing a second surface never interrupts or replaces an active owner', async t => {
+  const f = fixture(t);
+  await f.service.start('hold', 'original');
+  const generic = f.owner('generic', 'custom-target');
+  f.register(generic);
+  f.register(generic);
+  assert.equal(f.takes[0]!.stops, 0);
+  assert.equal(f.service.getSnapshot('original').phase, 'recording');
+  await f.service.releaseHold();
+  assert.equal(f.original.captures(), 0, 'an ambiguous release cannot consent for either input');
+  assert.equal(generic.captures(), 0);
+  f.hide('generic');
+  assert.equal(f.service.getSnapshot().phase, 'recording', 'single-owner defaults return after unregister');
+  const released = f.service.releaseHold();
+  f.takes[0]!.stop.resolve('original only');
+  await turn();
+  f.original.reply.resolve({ status: 'acknowledged' });
+  await released;
+  assert.deepEqual(f.requests.map(request => request.id), ['original']);
+  assert.equal(generic.draft.getSnapshot().text, '');
+});
+
+test('action revision changes before or after release invalidate the captured destination, including ABA', async t => {
+  for (const afterRelease of [false, true]) for (const increments of [1, 2]) {
+    const f = fixture(t);
+    await f.service.start('hold');
+    const take = f.takes[0]!;
+    const released = afterRelease ? f.service.releaseHold() : undefined;
+    for (let i = 0; i < increments; i++) {
+      const current = f.original.state.getSnapshot();
+      f.original.state.set({ ...current, actionRevision: current.actionRevision + 1 });
+    }
+    await f.service.releaseHold('original');
+    take.text('late old action');
+    take.stop.resolve('old destination words');
+    await released; await turn();
+    assert.equal(f.original.draft.getSnapshot().text, '');
+    assert.equal(f.requests.length, 0);
+    assert.equal(f.original.captures(), Number(afterRelease));
+    assert.equal(f.original.sendCalls(), 0);
+    assert.equal(f.service.getSnapshot().recovery?.text, 'old destination words');
+    assert.equal(f.service.canInsert(), false, 'recovery must not insert into a different action');
+    f.service.insertRecovery();
+    await f.service.releaseHold();
+    await f.service.start('hold');
+    assert.equal(f.original.captures(), Number(afterRelease), 'changed owner never grants replacement consent');
+    assert.equal(take.signal.aborted, false, 'audio remains available to recover manually');
+  }
+});
+
+test('owner submittability and editability gate late release and the SDK final dispatch checkpoint', async t => {
+  for (const fact of ['editable', 'submittable'] as const) for (const afterRelease of [false, true]) {
+    const f = fixture(t);
+    await f.service.start('hold');
+    const released = afterRelease ? f.service.releaseHold() : undefined;
+    f.original.state.set({ ...f.original.state.getSnapshot(), [fact]: false });
+    await f.service.releaseHold('original');
+    f.takes[0]!.stop.resolve('retained words');
+    await released; await turn();
+    assert.equal(f.requests.length, 0);
+    assert.equal(f.original.captures(), Number(afterRelease));
+    assert.equal(f.service.canStart(), false);
+    assert.equal(f.service.canInsert(), false);
+    if (fact === 'editable') {
+      assert.equal(f.original.draft.getSnapshot().text, '');
+      assert.equal(f.service.getSnapshot().recovery?.text, 'retained words');
+    } else if (afterRelease) {
+      assert.equal(f.original.draft.getSnapshot().text, 'retained words');
+      assert.equal(f.service.getSnapshot().sendOutcome, 'blocked');
+      assert.equal(f.original.sendCalls(), 1, 'Speech defers final submission authority to the SDK');
+    }
+  }
+});
+
+test('revoked module writes cannot settle transcription, and abort releases all retained resources', async t => {
+  const f = fixture(t);
+  await f.service.start('hold');
+  const released = f.service.releaseHold();
+  f.original.revoke();
+  f.takes[0]!.text('late provisional');
+  f.takes[0]!.stop.resolve('revoked final');
+  await released;
+  assert.equal(f.requests.length, 0);
+  assert.equal(f.original.captures(), 1);
+  assert.equal(f.original.draft.getSnapshot().text, '');
+  assert.equal(f.service.getSnapshot().recovery?.text, 'revoked final');
+  assert.equal(f.takes[0]!.signal.aborted, false);
+  f.controller.abort();
+  assert.equal(f.takes[0]!.signal.aborted, true);
+  assert.equal(f.original.draft.getSnapshot().blocks.length, 0);
+  assert.equal(f.service.hasUnpersistedWork(), false);
+  f.takes[0]!.text('later callback');
+  await f.service.start('hold', 'original');
+  assert.equal(f.takes.length, 1);
+  assert.equal(f.original.captures(), 1);
+});
+
+test('retirement and module revocation never redirect or replay already dispatched owner requests', async t => {
+  for (const cause of ['retirement', 'revocation'] as const) {
+    const f = fixture(t);
+    const generic = f.owner('generic', 'custom-route');
+    f.register(generic);
+    await f.service.start('hold', 'original');
+    const released = f.service.releaseHold('original');
+    f.takes[0]!.stop.resolve('already dispatched');
+    await turn();
+    assert.equal(f.requests.length, 1);
+    if (cause === 'retirement') f.original.state.set({ ...f.original.state.getSnapshot(), retired: true });
+    else f.controller.abort();
+    assert.equal(f.takes[0]!.signal.aborted, true);
+    assert.equal(f.service.hasRetainedRecording('original'), false);
+    f.original.reply.resolve({ status: 'acknowledged' });
+    await released;
+    assert.equal(generic.draft.getSnapshot().text, '');
+    assert.equal(generic.captures(), 0);
+    assert.equal(f.requests.length, 1);
+    assert.equal(f.original.sendCalls(), 1);
+    assert.equal(f.service.getSnapshot('original').phase, 'idle');
+  }
 });
 
 test('a text edit during final host publication cannot be adopted as the authorized send revision', async t => {
@@ -316,8 +499,8 @@ test('explicit clear cancels a captured host intent whose deferred dispatch has 
   assert.equal(f.service.getSnapshot().phase, 'idle');
 });
 
-test('post-release text, attachment and ABA edits prevent sending without losing audio or new input', async t => {
-  for (const change of ['text', 'attachment', 'attachment-aba', 'pending', 'peer'] as const) {
+test('post-release text, schema generation, attachment and ABA edits prevent sending without losing audio or new input', async t => {
+  for (const change of ['text', 'schema-generation', 'schema-aba', 'attachment', 'attachment-aba', 'pending', 'peer'] as const) {
     const f = fixture(t);
     f.original.attach('initial');
     await f.service.start('hold');
@@ -326,6 +509,8 @@ test('post-release text, attachment and ABA edits prevent sending without losing
     if (change === 'text') f.original.draft.editText('manual edit');
     if (change === 'attachment' || change === 'attachment-aba') f.original.attach('modified');
     if (change === 'attachment-aba') f.original.attach('initial');
+    if (change.startsWith('schema')) f.original.replaceSchema();
+    if (change === 'schema-aba') f.original.replaceSchema();
     if (change === 'pending') f.original.state.set({ ...f.original.draft.getSnapshot(), pending: true });
     if (change === 'peer') f.original.draft.block('peer');
     take.stop.resolve('recognized'); await release;
@@ -333,12 +518,15 @@ test('post-release text, attachment and ABA edits prevent sending without losing
     assert.equal(take.signal.aborted, false);
     assert.equal(f.service.getSnapshot().recovery?.text, 'recognized');
     if (change === 'text') assert.equal(f.original.draft.getSnapshot().text, 'manual edit');
-    if (change.startsWith('attachment')) assert.equal(f.service.getSnapshot().sendOutcome, 'blocked');
+    if (change.startsWith('attachment') || change.startsWith('schema')) assert.equal(f.service.getSnapshot().sendOutcome, 'blocked');
+    assert.equal(f.original.captures(), 1);
+    await f.service.retry(); await f.service.releaseHold();
+    assert.equal(f.original.captures(), 1, 'checkpoint failure cannot capture replacement consent');
   }
 });
 
-test('blocked and unknown native outcomes retain resources and never become transcription/send retry', async t => {
-  for (const outcome of ['blocked', 'unconfirmed', 'throw'] as const) {
+test('blocked, rejected, unknown and incomplete local settlement never recapture consent or resend', async t => {
+  for (const outcome of ['blocked', 'rejected', 'native-unconfirmed', 'transport-unconfirmed', 'settlement-failed', 'throw'] as const) {
     const f = fixture(t);
     await f.service.start('hold');
     const take = f.takes[0]!;
@@ -346,10 +534,15 @@ test('blocked and unknown native outcomes retain resources and never become tran
     take.stop.resolve('message'); await turn();
     if (outcome === 'throw') f.original.reply.reject(new Error('Synthetic unknown delivery'));
     else f.original.reply.resolve(outcome === 'blocked'
-      ? { status: 'blocked', reason: 'unavailable' } : { status: 'unconfirmed', reason: 'native-unconfirmed' });
+      ? { status: 'blocked', reason: 'unavailable' } : outcome === 'rejected'
+        ? { status: 'rejected', reason: 'Synthetic owner rejection' } : { status: 'unconfirmed', reason: outcome });
     await release;
     assert.equal(f.service.getSnapshot().phase, 'send-error');
-    assert.equal(f.service.getSnapshot().sendOutcome, outcome === 'blocked' ? 'blocked' : 'unconfirmed');
+    assert.equal(f.service.getSnapshot().sendOutcome, outcome === 'blocked' || outcome === 'rejected' ? outcome : 'unconfirmed');
+    assert.equal(f.service.getSnapshot().recovery?.text, 'message');
+    assert.equal(f.original.draft.getSnapshot().text, 'message', 'only complete SDK acknowledgement may clear submitted text');
+    if (outcome === 'rejected') assert.match(f.service.getSnapshot().error!, /拒绝/);
+    if (outcome === 'settlement-failed') assert.match(f.service.getSnapshot().error!, /本地确认/);
     assert.equal(f.service.canRetry(), false);
     assert.equal(f.service.canStart(), false);
     assert.equal(f.service.canInsert(), false);
@@ -358,6 +551,7 @@ test('blocked and unknown native outcomes retain resources and never become tran
     f.service.interrupt(); f.select(f.owner('other')); f.select(f.original);
     assert.equal(f.requests.length, 1);
     assert.equal(f.original.sendCalls(), 1);
+    assert.equal(f.original.captures(), 1);
     assert.equal(f.service.getSnapshot().phase, 'send-error');
     f.service.clear();
     assert.equal(take.signal.aborted, true);
@@ -431,8 +625,8 @@ function keyboardFixture(t: TestContext, f: ReturnType<typeof fixture>, original
   const editor = dom.editor();
   const unregister = keyboard.register({
     editor: () => editor as unknown as HTMLTextAreaElement,
-    available: () => f.host.getSnapshot().visible && f.host.getSnapshot().connected
-      && f.host.getSnapshot().sessionId === original.draft.sessionId && !original.draft.getSnapshot().retired,
+    available: () => f.surfaces.has(original.draft.id) && original.draft.getSnapshot().editable
+      && original.draft.getSnapshot().submittable && !original.draft.getSnapshot().retired,
     empty: () => original.draft.getSnapshot().text === '',
     canStart: () => f.service.canStart(original.draft.id),
     canContinue: () => original.draft.getSnapshot().text === '' || f.service.ownsDraft(original.draft.id),
@@ -459,7 +653,7 @@ test('F8 sends one complete original prompt/ask/plan through captureSend and nat
     f.select(f.owner('other', 'other-session'));
     k.unregister();
     f.takes[0]!.stop.resolve('complete words'); await turn();
-    assert.deepEqual(f.requests, [{ id: original.draft.id, sessionId: 'original-session', purpose, text: 'complete words', attachment: 'attachment' }]);
+    assert.deepEqual(f.requests, [{ id: original.draft.id, route: 'original-session', purpose, text: 'complete words', attachment: 'attachment' }]);
     assert.equal(original.captures(), 1);
     original.reply.resolve({ status: 'acknowledged' }); await turn();
     assert.equal(original.sendCalls(), 1);
@@ -475,7 +669,7 @@ test('F8 pre-release switch/rebind/hidden/blur/escape/external edit cannot autho
     if (reason === 'session') f.select(f.owner('other', 'other-session'));
     if (reason === 'ask') f.select(f.owner('ask', 'original-session', { kind: 'ask', requestId: 'replacement' }));
     if (reason === 'rebind') k.unregister();
-    if (reason === 'hidden') f.host.set({ ...f.host.getSnapshot(), visible: false });
+    if (reason === 'hidden') f.hide();
     if (reason === 'blur') k.window.dispatchEvent(new Event('blur'));
     if (reason === 'escape') k.key('keydown', { key: 'Escape' });
     if (reason === 'external-text') f.original.draft.editText('manual text');

@@ -45,6 +45,11 @@ export class KeyboardHold {
   private pressed = false;
   private composing = false;
   private detach?: () => void;
+  private readonly refreshSurfaces: () => void;
+
+  constructor(refreshSurfaces: () => void = () => {}) {
+    this.refreshSurfaces = refreshSurfaces;
+  }
 
   register(target: KeyboardTarget, document: Document, window: Window): () => void {
     this.targets.add(target);
@@ -61,6 +66,7 @@ export class KeyboardHold {
       document.addEventListener('compositionstart', compositionStart, true);
       document.addEventListener('compositionend', compositionEnd, true);
       document.addEventListener('visibilitychange', visibility);
+      window.addEventListener('focus', this.refresh);
       window.addEventListener('blur', this.interrupt);
       window.addEventListener('pagehide', this.interrupt);
       window.addEventListener('resize', this.interrupt);
@@ -78,6 +84,7 @@ export class KeyboardHold {
         document.removeEventListener('compositionstart', compositionStart, true);
         document.removeEventListener('compositionend', compositionEnd, true);
         document.removeEventListener('visibilitychange', visibility);
+        window.removeEventListener('focus', this.refresh);
         window.removeEventListener('blur', this.interrupt);
         window.removeEventListener('pagehide', this.interrupt);
         window.removeEventListener('resize', this.interrupt);
@@ -95,9 +102,15 @@ export class KeyboardHold {
     return !!editor && target.available() && keyboardSurfaceAvailable(editor);
   }
   refresh = (): void => {
+    this.refreshSurfaces();
     const owner = this.owner;
     if (owner && (!this.eligible(owner) || !owner.canContinue()
       || !['permission', 'recording'].includes(owner.phase()))) this.interrupt();
+    // The same registered surfaces also interrupt pointer/button capture when
+    // a dialog closes or makes an editor inert; no business-page lookup is used.
+    for (const target of this.targets) {
+      if (target !== owner && ['permission', 'recording'].includes(target.phase()) && !this.eligible(target)) target.interrupt();
+    }
   };
   interrupt = (): void => {
     const owner = this.owner;

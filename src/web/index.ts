@@ -3,14 +3,16 @@ import { createSpeechFrontend } from './frontend.ts';
 import { icons } from './icons.ts';
 import { version } from '../shared/version.ts';
 export { version };
+export const frontendApiVersion = 3;
 
 export { composeEditorRef } from './frontend.ts';
 
 export const activate: ActivateFrontend = context => {
-  if (context.apiVersion !== 2 || context.uiVersion !== 1 || context.uiSurfaceVersion !== 1 || context.chatWindowVersion !== 1
-    || context.composerInputVersion !== 1 || context.draftLifecycleVersion !== 1 || context.draftSubmissionVersion !== 1
-    || !context.state?.chatWindow || !context.state.bindDraft) {
-    throw new Error('语音模块需要前端 API v2、UI v1、uiSurfaceVersion v1、chatWindow v1、composerInput v1、draftLifecycle v1 和 draftSubmission v1，请先升级配套宿主。');
+  if (context.apiVersion !== 3 || context.uiVersion !== 1 || context.uiSurfaceVersion !== 1
+    || context.publicComponentsVersion !== 1 || context.draftOwnerVersion !== 1
+    || context.composerInputVersion !== 1 || context.draftLifecycleVersion !== 1 || context.draftSubmissionVersion !== 2
+    || !context.components?.get || !context.state?.bindDraft) {
+    throw new Error('语音模块需要前端 API v3、UI v1、uiSurfaceVersion v1、publicComponents v1、draftOwner v1、composerInput v1、draftLifecycle v1 和 draftSubmission v2，请先升级配套宿主。');
   }
   const React = context.react;
   const h = React.createElement;
@@ -23,7 +25,6 @@ export const activate: ActivateFrontend = context => {
   }
   function SpeechStatus({ id }: { id: string }) {
     const state = useSpeech(id);
-    React.useSyncExternalStore(context.state.host.subscribe, context.state.host.getSnapshot);
     const preparing = state.phase === 'permission';
     if (state.phase === 'idle' && !state.recovery && !state.notice) return null;
     const recording = state.phase === 'recording';
@@ -60,7 +61,6 @@ export const activate: ActivateFrontend = context => {
   }
   function SpeechPanel({ id }: { id: string }) {
     const state = useSpeech(id);
-    React.useSyncExternalStore(context.state.host.subscribe, context.state.host.getSnapshot);
     const active = state.phase !== 'idle' && state.phase !== 'retry' && state.phase !== 'send-error';
     const recovery = state.recovery;
     return (!active && recovery) ? h('section', { className: 'ck-surface cockpit-speech-panel', 'aria-label': '识别结果恢复' },
@@ -77,7 +77,7 @@ export const activate: ActivateFrontend = context => {
     ) : null;
   }
   return {
-    apiVersion: 2,
+    apiVersion: 3,
     writes: ['text'],
     sends: ['draft'],
     dispose,

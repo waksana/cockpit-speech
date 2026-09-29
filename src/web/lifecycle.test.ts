@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { test, type TestContext } from 'node:test';
-import type { ChatWindowSnapshot, DraftPurpose, HostSnapshot, ModuleDraft, ModuleDraftSnapshot } from '@waksana/cockpit-module-sdk/frontend';
+import type { DraftPurpose, ModuleDraft, ModuleDraftSnapshot } from '@waksana/cockpit-module-sdk/frontend';
 import { SpeechError } from '../shared/limits.ts';
 import type { Recording } from './recorder.ts';
 import { SpeechService } from './speech.ts';
@@ -22,18 +22,22 @@ function store<T>(initial: T) {
     listeners,
   };
 }
-function makeDraft(id: string, sessionId = 's', purpose: DraftPurpose = { kind: 'prompt' }) {
+function makeDraft(id: string, purpose: DraftPurpose = { kind: 'prompt' }) {
   const state = store<ModuleDraftSnapshot>({
-    text: 'before after', revision: 0, pending: false, unconfirmed: false, retired: false, blocks: [], hasContent: true,
+    text: 'before after', revision: 0, actionRevision: 0, editable: true, submittable: true,
+    capabilities: { attachments: false }, pending: false, unconfirmed: false, retired: false, blocks: [], hasContent: true,
   });
   let lease = 0;
   let rejected = false;
   const draft: ModuleDraft = {
-    id, sessionId, purpose, getSnapshot: state.getSnapshot, subscribe: state.subscribe,
-    editText(text) { state.set({ ...state.getSnapshot(), text, revision: state.getSnapshot().revision + 1 }); },
+    id, purpose, getSnapshot: state.getSnapshot, subscribe: state.subscribe,
+    editText(text) {
+      if (state.getSnapshot().retired || !state.getSnapshot().editable) throw new Error('Draft unavailable');
+      state.set({ ...state.getSnapshot(), text, revision: state.getSnapshot().revision + 1 });
+    },
     editTextIfRevision(text, revision) {
       const value = state.getSnapshot();
-      if (rejected || value.retired) throw new Error('Draft unavailable');
+      if (rejected || value.retired || !value.editable) throw new Error('Draft unavailable');
       if (value.revision !== revision || value.pending || value.unconfirmed || value.blocks.length) return false;
       this.editText(text);
       return true;
@@ -49,10 +53,6 @@ function makeDraft(id: string, sessionId = 's', purpose: DraftPurpose = { kind: 
   return { draft, state, rejectWrite: () => { rejected = true; } };
 }
 function fixture(t: TestContext) {
-  const host = store<HostSnapshot>({ sessionId: 's', visible: true, connected: true });
-  const chatWindow = store<ChatWindowSnapshot>({
-    sessionId: 's', status: 'unavailable', hasMore: false, partial: false, messages: [],
-  });
   const controller = new AbortController();
   const takes: {
     signal: AbortSignal; permission: ReturnType<typeof deferred<Recording>>;
@@ -65,7 +65,7 @@ function fixture(t: TestContext) {
   let delayPermission = false;
   let delayFlush = false;
   const service = new SpeechService({
-    signal: controller.signal, host, chatWindow, report: () => assert.fail('no global errors'),
+    signal: controller.signal, report: () => assert.fail('no global errors'),
     session: async () => { throw new Error('No real network'); },
     prepare(signal, fail) {
       const take = {
@@ -99,13 +99,16 @@ function fixture(t: TestContext) {
     },
   });
   const original = makeDraft('prompt');
+  let selected: string | undefined;
   const select = (value: ReturnType<typeof makeDraft>) => {
-    host.set({ ...host.getSnapshot(), sessionId: value.draft.sessionId });
-    service.setTarget({ draft: value.draft, disabled: false, sendBlocked: false, selection: () => ({ start: 7, end: 7 }) });
+    if (selected) service.clearTarget(selected);
+    selected = value.draft.id;
+    value.state.set({ ...value.state.getSnapshot(), submittable: true });
+    service.setTarget({ draft: value.draft, available: () => true, disabled: false, sendBlocked: false, selection: () => ({ start: 7, end: 7 }) });
   };
   select(original);
   t.after(() => service.dispose());
-  return { service, host, original, select, takes, controller,
+  return { service, original, select, takes, controller,
     delayPermission: () => { delayPermission = true; },
     delayFlush: () => { delayFlush = true; } };
 }
@@ -113,11 +116,15 @@ const turn = () => new Promise<void>(resolve => setImmediate(resolve));
 const departures = ['session', 'ask', 'hidden', 'unmount', 'disconnect'] as const;
 type Departure = typeof departures[number];
 function depart(f: ReturnType<typeof fixture>, cause: Departure) {
-  const next = makeDraft(`next-${cause}`, cause === 'session' ? 'other' : 's',
+  const next = makeDraft(`next-${cause}`,
     cause === 'ask' ? { kind: 'ask', requestId: 'question' } : { kind: 'prompt' });
   if (cause === 'session' || cause === 'ask') f.select(next);
-  if (cause === 'hidden') f.host.set({ ...f.host.getSnapshot(), visible: false });
-  if (cause === 'disconnect') f.host.set({ ...f.host.getSnapshot(), connected: false });
+  if (cause === 'hidden') f.service.clearTarget(f.original.draft.id);
+  if (cause === 'disconnect') {
+    f.original.state.set({ ...f.original.state.getSnapshot(), submittable: false });
+    f.service.setTarget({ draft: f.original.draft, available: () => true, disabled: false, sendBlocked: false,
+      selection: () => ({ start: 7, end: 7 }) });
+  }
   if (cause === 'unmount') f.service.clearTarget(f.original.draft.id);
   return next;
 }
@@ -154,7 +161,6 @@ test('button and hold departure matrix: permission, capture, flush, transcriptio
           } else if (phase === 'retry') {
             assert.equal(take.signal.aborted, false);
             assert.equal(f.service.getSnapshot('prompt').phase, 'retry');
-            f.host.set({ sessionId: 's', visible: true, connected: true });
             f.select(f.original);
             assert.equal(f.service.canRetry(), true);
             const replay = f.service.retry();
@@ -176,7 +182,6 @@ test('button and hold departure matrix: permission, capture, flush, transcriptio
           }
           assert.equal(next.draft.getSnapshot().text, 'before after');
           assert.equal(f.original.draft.getSnapshot().blocks.length, 0);
-          f.host.set({ sessionId: 's', visible: true, connected: true });
           f.select(f.original);
           assert.equal(f.service.getSnapshot().phase, 'idle');
           assert.equal(f.service.canStart(), true);
@@ -188,7 +193,7 @@ test('button and hold departure matrix: permission, capture, flush, transcriptio
 
 test('independent draft tasks transmit concurrently with one capture and no retained-task limit', async t => {
   const f = fixture(t);
-  const drafts = [f.original, ...Array.from({ length: 6 }, (_, i) => makeDraft(`prompt-${i}`, `session-${i}`))];
+  const drafts = [f.original, ...Array.from({ length: 6 }, (_, i) => makeDraft(`prompt-${i}`))];
   for (const owner of drafts) {
     f.select(owner);
     await f.service.start();
@@ -322,7 +327,7 @@ test('authoritative retirement disposes hidden tasks in every phase and reused I
   for (const phase of ['permission', 'recording', 'stopping', 'transcribing', 'retry', 'recovery'] as const) {
     await t.test(phase, async t => {
       const f = fixture(t);
-      const old = makeDraft('old-answer', 's', { kind: 'ask', requestId: 'reused' });
+      const old = makeDraft('old-answer', { kind: 'ask', requestId: 'reused' });
       f.select(old);
       if (phase === 'permission') f.delayPermission();
       if (phase === 'stopping') f.delayFlush();
@@ -340,7 +345,7 @@ test('authoritative retirement disposes hidden tasks in every phase and reused I
       assert.equal(take.signal.aborted, true);
       assert.equal(old.state.listeners.size, 0);
       assert.equal(old.draft.getSnapshot().blocks.length, 0);
-      const replacement = makeDraft('new-answer', 's', { kind: 'ask', requestId: 'reused' });
+      const replacement = makeDraft('new-answer', { kind: 'ask', requestId: 'reused' });
       f.select(replacement);
       take.permission.resolve(take.recording);
       take.flush.resolve(); take.result.resolve('late');

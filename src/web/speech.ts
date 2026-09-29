@@ -1,17 +1,21 @@
-import type { CapturedDraftSend, ChatWindowSnapshot, DraftPurpose, HostSnapshot, ModuleDraft, ReadonlyState } from '@waksana/cockpit-module-sdk/frontend';
+import type { CapturedDraftSend, DraftPurpose, ModuleDraft } from '@waksana/cockpit-module-sdk/frontend';
 import { SpeechError } from '../shared/limits.ts';
 import { askContext, recentContext } from './context.ts';
 import type { Recording, RecordingPreparation, PrepareRecording } from './recorder.ts';
 import type { CreateSession } from './transport.ts';
 
 export interface Selection { start: number; end: number }
-export interface Target { draft: ModuleDraft; disabled: boolean; sendBlocked: boolean; selection(): Selection }
-interface Identity { id: string; sessionId: string; purpose: string }
+export interface Target {
+  draft: ModuleDraft; disabled: boolean; sendBlocked: boolean;
+  available(): boolean;
+  selection(): Selection;
+}
+interface Identity { id: string; purpose: string }
 export interface Recovery extends Identity { text: string }
 export interface SpeechSnapshot {
   phase: 'idle' | 'permission' | 'recording' | 'stopping' | 'transcribing' | 'retry' | 'sending' | 'send-error';
   sendRequested: boolean;
-  sendOutcome: 'blocked' | 'unconfirmed' | null;
+  sendOutcome: 'blocked' | 'rejected' | 'unconfirmed' | null;
   elapsedSeconds: number;
   holdingAtLimit: boolean;
   level: number;
@@ -21,7 +25,7 @@ export interface SpeechSnapshot {
   focus: { id: string; revision: number; selection: Selection; activate: boolean } | null;
 }
 interface Operation {
-  identity: Identity; draft: ModuleDraft; revision: number; selection: Selection; text: string;
+  identity: Identity; draft: ModuleDraft; revision: number; actionRevision: number; selection: Selection; text: string;
   controller: AbortController; release(): void; unsubscribe(): void;
   state: SpeechSnapshot; recording?: Recording; context?: string;
   preparation?: RecordingPreparation; limited?: boolean; completion?: object;
@@ -35,15 +39,13 @@ interface Operation {
 }
 export interface SpeechOptions {
   signal: AbortSignal;
-  host: ReadonlyState<HostSnapshot>;
-  chatWindow: ReadonlyState<ChatWindowSnapshot>;
   prepare: PrepareRecording;
   session: CreateSession;
   report(error: Error): void;
 }
 const purposeKey = (purpose: DraftPurpose) => purpose.kind === 'prompt' ? 'prompt' : `${purpose.kind}:${purpose.requestId}`;
-const identity = (draft: ModuleDraft): Identity => ({ id: draft.id, sessionId: draft.sessionId, purpose: purposeKey(draft.purpose) });
-const matches = (a: Identity, b: Identity) => a.id === b.id && a.sessionId === b.sessionId && a.purpose === b.purpose;
+const identity = (draft: ModuleDraft): Identity => ({ id: draft.id, purpose: purposeKey(draft.purpose) });
+const matches = (a: Identity, b: Identity) => a.id === b.id && a.purpose === b.purpose;
 const idle: SpeechSnapshot = { phase: 'idle', sendRequested: false, sendOutcome: null, elapsedSeconds: 0, holdingAtLimit: false,
   level: 0, error: null, notice: null, recovery: null, focus: null };
 
@@ -56,23 +58,24 @@ export function insertText(text: string, addition: string, selection: Selection)
 export class SpeechService {
   private readonly listeners = new Set<() => void>();
   private readonly operations = new Map<string, Operation>();
-  private target: Target | null = null;
+  private readonly targets = new Map<string, { target: Target; view: SpeechSnapshot; available: boolean }>();
   private capture: Operation | null = null;
-  private view: SpeechSnapshot = idle;
   private disposed = false;
   private readonly options: SpeechOptions;
-  private readonly unsubscribe: () => void;
   constructor(options: SpeechOptions) {
     this.options = options;
-    this.unsubscribe = options.host.subscribe(() => {
-      if (this.capture && !this.hostReady(this.capture.identity.sessionId)) this.interrupt(this.capture.identity.id);
-      this.notify();
-    });
     options.signal.addEventListener('abort', this.dispose, { once: true });
     if (options.signal.aborted) this.dispose();
   }
+  private get target(): Target | undefined {
+    return this.targets.size === 1 ? this.targets.values().next().value?.target : undefined;
+  }
   getSnapshot = (id = this.target?.draft.id): SpeechSnapshot =>
-    (id ? this.operations.get(id)?.state : undefined) ?? (id === this.target?.draft.id ? this.view : idle);
+    (id ? this.operations.get(id)?.state ?? this.targets.get(id)?.view : undefined) ?? idle;
+  private setView(id: string, view: SpeechSnapshot): void {
+    const entry = this.targets.get(id);
+    if (entry) entry.view = view;
+  }
   hasUnpersistedWork(): boolean {
     return [...this.operations.values()].some(operation =>
       !['idle', 'retry', 'send-error'].includes(operation.state.phase)
@@ -83,9 +86,8 @@ export class SpeechService {
     return () => { this.listeners.delete(listener); };
   };
   private notify(): void {
-    const visible = this.target && this.operations.get(this.target.draft.id);
-    if (visible) visible.state = { ...visible.state };
-    else this.view = { ...this.view };
+    for (const entry of this.targets.values()) entry.view = { ...entry.view };
+    for (const operation of this.operations.values()) operation.state = { ...operation.state };
     for (const listener of this.listeners) listener();
   }
   private update(operation: Operation, change: Partial<SpeechSnapshot>): void {
@@ -93,23 +95,28 @@ export class SpeechService {
     operation.state = { ...operation.state, ...change };
     this.notify();
   }
-  private hostReady(sessionId: string): boolean {
-    const host = this.options.host.getSnapshot();
-    return host.connected && host.visible && host.sessionId === sessionId;
-  }
   setTarget(target: Target): void {
     if (this.disposed) return;
-    if (this.capture && (!matches(this.capture.identity, identity(target.draft)) || target.disabled || target.sendBlocked)) {
+    const previous = this.targets.get(target.draft.id);
+    this.targets.set(target.draft.id, { target, view: previous?.view ?? idle, available: this.available(target) });
+    if (this.capture?.identity.id === target.draft.id && !this.available(target)) {
       this.interrupt(this.capture.identity.id);
     }
-    if (this.target?.draft.id !== target.draft.id) this.view = idle;
-    this.target = target;
     this.notify();
   }
+  refreshTargets = (): void => {
+    let changed = false;
+    for (const entry of this.targets.values()) {
+      const available = this.available(entry.target);
+      if (entry.available !== available) {
+        entry.available = available;
+        changed = true;
+      }
+    }
+    if (changed) this.notify();
+  };
   clearTarget(id: string): void {
-    if (this.target?.draft.id !== id) return;
-    this.target = null;
-    this.view = idle;
+    this.targets.delete(id);
     const operation = this.operations.get(id);
     if (operation) {
       this.update(operation, { focus: null });
@@ -118,19 +125,25 @@ export class SpeechService {
     this.notify();
   }
   focusTarget(selection?: Selection, id = this.target?.draft.id, activate = true): void {
-    const target = this.target;
-    if (!target || target.draft.id !== id || target.disabled || !this.hostReady(target.draft.sessionId)) return;
-    this.view = { ...idle, focus: { id: target.draft.id, revision: target.draft.getSnapshot().revision,
-      selection: selection ?? target.selection(), activate } };
+    const target = id ? this.targets.get(id)?.target : undefined;
+    if (!target || !this.available(target)) return;
+    this.setView(target.draft.id, { ...idle, focus: { id: target.draft.id, revision: target.draft.getSnapshot().revision,
+      selection: selection ?? target.selection(), activate } });
     this.notify();
   }
   canStart(id = this.target?.draft.id): boolean {
-    if (this.disposed || this.capture || !id || this.operations.has(id) || this.target?.draft.id !== id) return false;
-    return this.writable(this.target);
+    if (this.disposed || this.capture || !id || this.operations.has(id)) return false;
+    const target = this.targets.get(id)?.target;
+    return !!target && this.writable(target);
+  }
+  private available(target: Target): boolean {
+    const draft = target.draft.getSnapshot();
+    return !target.disabled && !target.sendBlocked && target.available()
+      && draft.editable && draft.submittable && !draft.retired;
   }
   private writable(target: Target): boolean {
     const draft = target.draft.getSnapshot();
-    return !target.disabled && !target.sendBlocked && this.hostReady(target.draft.sessionId)
+    return this.available(target)
       && !draft.retired && !draft.pending && !draft.unconfirmed && draft.blocks.length === 0;
   }
   private current(operation: Operation): boolean {
@@ -152,10 +165,11 @@ export class SpeechService {
     if (operation.conflicted) return;
     try {
       const snapshot = operation.draft.getSnapshot();
-      const target = this.target;
+      const target = this.targets.get(operation.identity.id)?.target;
       const gated = !operation.state.sendRequested && target
         && matches(operation.identity, identity(target.draft)) && (target.disabled || target.sendBlocked);
-      if (gated || snapshot.retired || snapshot.revision !== operation.revision || snapshot.pending || snapshot.unconfirmed
+      if (gated || snapshot.actionRevision !== operation.actionRevision
+        || !snapshot.editable || snapshot.retired || snapshot.revision !== operation.revision || snapshot.pending || snapshot.unconfirmed
         || snapshot.blocks.some(block => block.id !== operation.leaseId)) {
         operation.conflicted = true; return;
       }
@@ -178,10 +192,10 @@ export class SpeechService {
   async start(mode: 'button' | 'hold' = 'button', id = this.target?.draft.id,
     options: { focusOnCompletion?: boolean } = {}): Promise<void> {
     if (!this.canStart(id)) return;
-    const target = this.target!;
+    const target = this.targets.get(id!)!.target;
     const snapshot = target.draft.getSnapshot();
     const operation: Operation = {
-      identity: identity(target.draft), draft: target.draft, revision: snapshot.revision,
+      identity: identity(target.draft), draft: target.draft, revision: snapshot.revision, actionRevision: snapshot.actionRevision,
       text: snapshot.text, selection: target.selection(), controller: new AbortController(),
       release: () => {}, unsubscribe: () => {}, state: { ...idle, phase: 'permission' },
       transcript: '', conflicted: false, mode, focusOnCompletion: options.focusOnCompletion ?? true,
@@ -189,16 +203,20 @@ export class SpeechService {
     this.operations.set(operation.identity.id, operation);
     this.capture = operation;
     operation.unsubscribe = operation.draft.subscribe(() => {
-      if (operation.draft.getSnapshot().retired) {
+      const snapshot = operation.draft.getSnapshot();
+      if (snapshot.retired) {
         this.finish(operation);
         this.notify();
+      } else if (snapshot.actionRevision !== operation.actionRevision) {
+        operation.conflicted = true;
+        if (['permission', 'recording'].includes(operation.state.phase)) this.interrupt(operation.identity.id);
       }
     });
-    this.view = idle;
+    this.setView(operation.identity.id, idle);
     try {
       operation.context = target.draft.purpose.kind === 'ask'
         ? askContext(snapshot.askContext)
-        : recentContext(this.options.host.getSnapshot(), this.options.chatWindow.getSnapshot(), target.draft.sessionId);
+        : recentContext(snapshot.referenceText);
       if (target.draft.purpose.kind === 'ask' && !operation.context) {
         operation.state = { ...operation.state, notice: '当前问题参考不可用，将仅根据录音转写。' };
       }
@@ -237,9 +255,10 @@ export class SpeechService {
   interrupt(id = this.target?.draft.id): void {
     const operation = id ? this.operations.get(id) : undefined;
     if (!operation) return;
-    this.update(operation, { focus: null });
+    operation.state = { ...operation.state, focus: null };
     if (operation.state.phase === 'permission') this.cancel(id);
     else if (operation.state.phase === 'recording') void this.stop(id);
+    else this.notify();
   }
   async stop(id = this.target?.draft.id): Promise<void> {
     const operation = id ? this.operations.get(id) : undefined;
@@ -248,8 +267,13 @@ export class SpeechService {
   }
   async releaseHold(id = this.target?.draft.id): Promise<void> {
     const operation = id ? this.operations.get(id) : undefined;
-    if (!operation || operation.mode !== 'hold' || operation.state.phase !== 'recording'
-      || this.target?.draft.id !== id || !this.hostReady(operation.identity.sessionId)) return;
+    const target = id ? this.targets.get(id)?.target : undefined;
+    if (!operation || operation.mode !== 'hold' || operation.state.phase !== 'recording') return;
+    if (!target || !this.available(target) || operation.conflicted
+      || operation.draft.getSnapshot().actionRevision !== operation.actionRevision) {
+      this.interrupt(id);
+      return;
+    }
     // Capture consent before ending acquisition; later navigation cannot redirect or undo it.
     try { operation.sendIntent = operation.draft.captureSend(); }
     catch {
@@ -260,8 +284,9 @@ export class SpeechService {
   }
   canRetry(id = this.target?.draft.id): boolean {
     const operation = id ? this.operations.get(id) : undefined;
-    return !!operation && operation.state.phase === 'retry' && !this.disposed && !!this.target && this.target.draft.id === id
-      && this.writable(this.target) && (operation.recording ? operation.recording.retryable() : !this.capture);
+    const target = id ? this.targets.get(id)?.target : undefined;
+    return !!operation && operation.state.phase === 'retry' && !this.disposed && !!target
+      && this.writable(target) && (operation.recording ? operation.recording.retryable() : !this.capture);
   }
   async retry(id = this.target?.draft.id): Promise<void> {
     if (!this.canRetry(id)) return;
@@ -298,11 +323,12 @@ export class SpeechService {
       this.release(operation);
       if (!current()) return;
       try {
-        const target = this.target;
+        const target = this.targets.get(operation.identity.id)?.target;
         const gated = !operation.state.sendRequested && target
           && matches(operation.identity, identity(target.draft)) && (target.disabled || target.sendBlocked);
         const next = text ? insertText(operation.text, text, operation.selection) : operation.text;
-        if (gated || operation.conflicted || !operation.draft.editTextIfRevision(next, operation.revision)) {
+        if (gated || operation.conflicted || operation.draft.getSnapshot().actionRevision !== operation.actionRevision
+          || !operation.draft.editTextIfRevision(next, operation.revision)) {
           this.update(operation, { notice: '草稿已修改或暂时无法写入。识别结果和录音已保留，可复制或手动插入原输入框。' });
           return;
         }
@@ -315,8 +341,8 @@ export class SpeechService {
         if (text && operation.focusOnCompletion) {
           const caret = Math.max(0, Math.min(operation.text.length, operation.selection.start)) + text.length;
           this.focusTarget({ start: caret, end: caret }, operation.identity.id, false);
-        } else if (!text && this.target?.draft.id === operation.identity.id) {
-          this.view = { ...idle, notice: '未识别到语音，草稿未被替换。' };
+        } else if (!text) {
+          this.setView(operation.identity.id, { ...idle, notice: '未识别到语音，草稿未被替换。' });
         }
         this.notify();
       } catch {
@@ -344,23 +370,26 @@ export class SpeechService {
       this.sendFailed(operation, text, 'unconfirmed');
     }
   }
-  private sendFailed(operation: Operation, text: string, outcome: 'blocked' | 'unconfirmed'): void {
+  private sendFailed(operation: Operation, text: string, outcome: 'blocked' | 'rejected' | 'unconfirmed'): void {
     this.update(operation, { phase: 'send-error', sendOutcome: outcome,
       recovery: { ...operation.identity, text }, notice: null,
       error: outcome === 'blocked'
         ? '自动发送未执行。录音和文字已保留，请确认原草稿后使用原发送按钮。'
-        : '发送结果未确认，可能已提交；不会自动重发。录音和文字已保留，请先检查原会话的消息或队列。',
+        : outcome === 'rejected' ? '原输入的接收方已拒绝发送。录音和文字已保留，请确认原草稿后使用原发送按钮。'
+        : '发送结果未确认，可能已提交或本地确认未完成；不会自动重发。录音和文字已保留，请先检查原输入的提交记录。',
     });
   }
   canInsert(id = this.target?.draft.id): boolean {
     const operation = id ? this.operations.get(id) : undefined;
-    return !!operation?.state.recovery && !this.disposed && !!this.target && this.target.draft.id === id
+    const target = id ? this.targets.get(id)?.target : undefined;
+    return !!operation?.state.recovery && !this.disposed && !!target
       && (operation.state.phase === 'idle' || operation.state.phase === 'retry')
-      && matches(operation.identity, identity(this.target.draft)) && this.writable(this.target);
+      && matches(operation.identity, identity(target.draft))
+      && target.draft.getSnapshot().actionRevision === operation.actionRevision && this.writable(target);
   }
   insertRecovery(id = this.target?.draft.id): void {
     if (!this.canInsert(id)) return;
-    const target = this.target!;
+    const target = this.targets.get(id!)!.target;
     const operation = this.operations.get(id!)!;
     const recovery = operation.state.recovery!;
     try {
@@ -380,7 +409,7 @@ export class SpeechService {
   clear(id = this.target?.draft.id): void {
     const operation = id ? this.operations.get(id) : undefined;
     if (operation) this.finish(operation);
-    if (this.target?.draft.id === id) this.view = idle;
+    if (id) this.setView(id, idle);
     this.notify();
   }
   notifyCopyFailure(id = this.target?.draft.id, recovery?: Recovery): void {
@@ -413,7 +442,7 @@ export class SpeechService {
     if (!this.current(operation) || operation.state.phase === 'sending' || operation.state.phase === 'send-error') return;
     if (error instanceof SpeechError && error.code === 'AUDIO_TOO_SHORT') {
       this.finish(operation);
-      if (this.target?.draft.id === operation.identity.id) this.view = idle;
+      this.setView(operation.identity.id, idle);
       this.notify();
       return;
     }
@@ -430,9 +459,7 @@ export class SpeechService {
     this.disposed = true;
     for (const operation of this.operations.values()) this.finish(operation);
     this.options.signal.removeEventListener('abort', this.dispose);
-    this.unsubscribe();
-    this.target = null;
-    this.view = idle;
+    this.targets.clear();
     this.listeners.clear();
   };
 }

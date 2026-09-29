@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import type { ChatWindowSnapshot, DraftPurpose, HostSnapshot, ModuleDraft, ModuleDraftSnapshot } from '@waksana/cockpit-module-sdk/frontend';
+import type { DraftPurpose, ModuleDraft, ModuleDraftSnapshot } from '@waksana/cockpit-module-sdk/frontend';
 import { SpeechError } from '../shared/limits.ts';
 import { SpeechService } from './speech.ts';
 import type { Recording } from './recorder.ts';
@@ -24,14 +24,19 @@ function store<T>(initial: T) {
   };
 }
 function draft(id = 'draft-1', purpose: DraftPurpose = { kind: 'prompt' }): ModuleDraft & { state: ReturnType<typeof store<ModuleDraftSnapshot>> } {
-  const state = store<ModuleDraftSnapshot>({ text: 'hello world', revision: 1, blocks: [], pending: false, unconfirmed: false, hasContent: true, retired: false,
+  const state = store<ModuleDraftSnapshot>({ text: 'hello world', revision: 1, actionRevision: 0,
+    editable: true, submittable: true, capabilities: { attachments: false }, referenceText: 'initial context',
+    blocks: [], pending: false, unconfirmed: false, hasContent: true, retired: false,
     ...(purpose.kind === 'ask' ? { askContext: { question: 'Synthetic question?', choices: ['Alpha', 'Beta'] } } : {}) });
   return {
-    id, sessionId: 's', purpose, ...state, state,
-    editText(text) { state.set({ ...state.getSnapshot(), text, revision: state.getSnapshot().revision + 1 }); },
+    id, purpose, ...state, state,
+    editText(text) {
+      if (state.getSnapshot().retired || !state.getSnapshot().editable) throw new Error('not editable');
+      state.set({ ...state.getSnapshot(), text, revision: state.getSnapshot().revision + 1 });
+    },
     editTextIfRevision(text, revision) {
       const snapshot = state.getSnapshot();
-      if (snapshot.retired) throw new Error('retired');
+      if (snapshot.retired || !snapshot.editable) throw new Error('not editable');
       if (snapshot.revision !== revision || snapshot.pending || snapshot.unconfirmed || snapshot.blocks.length) return false;
       this.editText(text);
       return true;
@@ -49,11 +54,6 @@ function draft(id = 'draft-1', purpose: DraftPurpose = { kind: 'prompt' }): Modu
   };
 }
 function fixture(options: { permission?: boolean; purpose?: DraftPurpose; ready?: (signal: AbortSignal) => Promise<void> } = {}) {
-  const host = store<HostSnapshot>({ sessionId: 's', visible: true, connected: true });
-  const chatWindow = store<ChatWindowSnapshot>({
-    sessionId: 's', status: 'ready', hasMore: false, partial: false,
-    messages: [{ id: 'ui', origin: { sessionId: 's', messageId: 'native' }, role: 'assistant', text: 'initial context', complete: true, children: [] }],
-  });
   const permission = deferred<Recording>();
   const result = deferred<string>();
   const retryResult = deferred<string>();
@@ -82,7 +82,7 @@ function fixture(options: { permission?: boolean; purpose?: DraftPurpose; ready?
     cancel: () => { cancelled++; },
   };
   const service = new SpeechService({
-    signal: controller.signal, host, chatWindow,
+    signal: controller.signal,
     prepare: (signal, fail, limit) => {
       capturedSignal = signal;
       recorderFailure = fail; limitReached = limit;
@@ -105,8 +105,8 @@ function fixture(options: { permission?: boolean; purpose?: DraftPurpose; ready?
     },
     report: error => reports.push(error),
   });
-  service.setTarget({ draft: original, disabled: false, sendBlocked: false, selection: () => ({ start: 6, end: 11 }) });
-  return { service, host, chatWindow, original, permission, result, retryResult, controller, reports, recording,
+  service.setTarget({ draft: original, available: () => true, disabled: false, sendBlocked: false, selection: () => ({ start: 6, end: 11 }) });
+  return { service, original, permission, result, retryResult, controller, reports, recording,
     setRetryable: (value: boolean) => { retryable = value; },
     values: () => ({ cancelled, stops, requests, captures, preparationsCancelled, readyCalls, capturedContext, capturedSignal }),
     limit: () => limitReached(), fail: (e: SpeechError) => recorderFailure(e),
@@ -137,7 +137,7 @@ test('unload protection includes hidden recording, retry and recovery without dr
       assert.equal(unload(), true);
       f.service.clearTarget(f.original.id);
       const other = draft('other');
-      f.service.setTarget({ draft: other, disabled: false, sendBlocked: false, selection: () => ({ start: 0, end: 0 }) });
+      f.service.setTarget({ draft: other, available: () => true, disabled: false, sendBlocked: false, selection: () => ({ start: 0, end: 0 }) });
       if (phase === 'permission') {
         f.permission.resolve(f.recording); await start;
         assert.equal(unload(), false, 'departure cancels pending permission');
@@ -330,7 +330,7 @@ test('prompt, ask and plan insert at the captured selection only after stop; con
     assert.equal(f.original.getSnapshot().text, 'hello world');
     assert.equal(f.original.getSnapshot().blocks.length, 1);
     assert.equal(f.values().requests, 0);
-    f.chatWindow.set({ ...f.chatWindow.getSnapshot(), messages: [] });
+    f.original.state.set({ ...f.original.getSnapshot(), referenceText: undefined });
     const stopped = f.service.stop();
     await new Promise<void>(resolve => setImmediate(resolve));
     assert.equal(f.service.getSnapshot().phase, 'transcribing');
@@ -346,10 +346,10 @@ test('prompt, ask and plan insert at the captured selection only after stop; con
     });
   }
 });
-test('ask captures only its bound question before permission, even with an unavailable chat window', async t => {
+test('ask captures only its bound question before permission, never ordinary reference text', async t => {
   const f = fixture({ purpose: { kind: 'ask', requestId: 'question' }, permission: true });
   t.after(() => f.service.dispose());
-  f.chatWindow.set({ ...f.chatWindow.getSnapshot(), status: 'unavailable', sessionId: 'other' });
+  f.original.state.set({ ...f.original.getSnapshot(), referenceText: 'Unrelated ordinary reply' });
   const starting = f.service.start();
   assert.equal(f.values().capturedContext, 'Question: Synthetic question?\nChoices:\n- Alpha\n- Beta');
   f.original.state.set({ ...f.original.getSnapshot(), askContext: { question: 'Changed while asking permission' } });
@@ -357,6 +357,121 @@ test('ask captures only its bound question before permission, even with an unava
   assert.equal(f.values().capturedContext, 'Question: Synthetic question?\nChoices:\n- Alpha\n- Beta');
   assert.equal(f.service.getSnapshot().notice, null);
 });
+test('owner reference context is optional, Unicode bounded and immutable through permission changes', async t => {
+  const tail = '😀'.repeat(999) + '终';
+  for (const referenceText of [undefined, '', ' \n ', `unrelated prefix${tail}`]) {
+    const f = fixture({ permission: true });
+    t.after(() => f.service.dispose());
+    f.original.state.set({ ...f.original.getSnapshot(), referenceText });
+    const starting = f.service.start();
+    const expected = referenceText?.trim() ? tail : undefined;
+    assert.equal(f.values().capturedContext, expected);
+    const background = draft('background-chat');
+    background.state.set({ ...background.getSnapshot(), referenceText: 'private background Chat text' });
+    f.service.setTarget({ draft: background, available: () => true, disabled: false, sendBlocked: false,
+      selection: () => ({ start: 0, end: 0 }) });
+    f.original.state.set({ ...f.original.getSnapshot(), referenceText: 'owner context updated later' });
+    f.permission.resolve(f.recording);
+    await starting;
+    assert.equal(f.values().capturedContext, expected);
+    assert.equal(f.service.getSnapshot(f.original.id).phase, 'recording');
+    assert.equal(background.getSnapshot().text, 'hello world');
+  }
+});
+
+test('unavailable editor surfaces gate capture independently of valid owner facts', async t => {
+  const f = fixture();
+  t.after(() => f.service.dispose());
+  let available = false;
+  const target = { draft: f.original, available: () => available, disabled: false, sendBlocked: false,
+    selection: () => ({ start: 0, end: 0 }) };
+  f.service.setTarget(target);
+  assert.equal(f.service.canStart(), false);
+  await f.service.start();
+  assert.equal(f.values().captures, 0);
+  available = true;
+  f.service.refreshTargets();
+  assert.equal(f.service.canStart(), true);
+  await f.service.start();
+  available = false;
+  f.service.setTarget(target);
+  assert.equal(f.values().stops, 1, 'the unavailable registered surface seals recording without consent');
+  f.result.resolve('hidden draft words');
+  await turn();
+  assert.equal(f.original.getSnapshot().text, 'hidden draft wordshello world');
+  assert.equal(f.service.canStart(), false);
+  assert.equal(f.service.getSnapshot().focus, null);
+});
+
+test('surface availability changes publish new snapshots for every registered React subscriber', async t => {
+  const f = fixture();
+  t.after(() => f.service.dispose());
+  const other = draft('generic-owner');
+  let available = true;
+  f.service.setTarget({ draft: other, available: () => available, disabled: false, sendBlocked: false,
+    selection: () => ({ start: 0, end: 0 }) });
+  await f.service.start('button', f.original.id);
+  const active = f.service.getSnapshot(f.original.id);
+  const idle = f.service.getSnapshot(other.id);
+  assert.equal(f.service.getSnapshot(f.original.id), active, 'snapshot identity is stable without publication');
+  assert.equal(f.service.getSnapshot(other.id), idle);
+  let publications = 0;
+  const unsubscribe = f.service.subscribe(() => { publications++; });
+  t.after(unsubscribe);
+  available = false;
+  f.service.refreshTargets();
+  assert.equal(publications, 1);
+  assert.notEqual(f.service.getSnapshot(f.original.id), active);
+  assert.notEqual(f.service.getSnapshot(other.id), idle);
+  assert.deepEqual(f.service.getSnapshot(f.original.id), active, 'availability refresh preserves the active owner operation');
+  assert.deepEqual(f.service.getSnapshot(other.id), idle);
+  assert.equal(f.values().stops, 0, 'another surface becoming unavailable cannot interrupt this capture');
+  f.service.refreshTargets();
+  assert.equal(publications, 1, 'unchanged availability does not publish a render loop');
+});
+
+test('changed owner action cancels pending permission without letting a late grant write or restart', async t => {
+  const f = fixture({ permission: true });
+  t.after(() => f.service.dispose());
+  const starting = f.service.start('hold');
+  f.original.state.set({ ...f.original.getSnapshot(), actionRevision: 1 });
+  assert.equal(f.values().capturedSignal?.aborted, true);
+  assert.equal(f.original.getSnapshot().blocks.length, 0);
+  f.permission.resolve(f.recording);
+  await starting;
+  f.text('late old action');
+  assert.equal(f.values().cancelled, 1);
+  assert.equal(f.values().stops, 0);
+  assert.equal(f.original.getSnapshot().text, 'hello world');
+  assert.equal(f.service.getSnapshot().phase, 'idle');
+});
+
+test('interruption leaves capture phase before publishing to synchronous refresh subscribers', async t => {
+  for (const permission of [false, true]) {
+    const f = fixture({ permission });
+    t.after(() => f.service.dispose());
+    const starting = f.service.start('hold');
+    if (!permission) await starting;
+    const phases: string[] = [];
+    const unsubscribe = f.service.subscribe(() => { phases.push(f.service.getSnapshot(f.original.id).phase); });
+    t.after(unsubscribe);
+    f.service.interrupt(f.original.id);
+    assert.ok(phases.length > 0);
+    assert.equal(phases.includes('permission'), false);
+    assert.equal(phases.includes('recording'), false, 'refresh must never see an interrupted operation still acquiring');
+    if (permission) {
+      f.permission.resolve(f.recording);
+      await starting;
+      assert.equal(f.values().cancelled, 1);
+    } else {
+      f.result.resolve('interrupted draft');
+      await turn();
+      assert.equal(f.values().stops, 1);
+      assert.equal(f.original.getSnapshot().text, 'hello interrupted draft');
+    }
+  }
+});
+
 test('missing ask question explicitly degrades to audio only, never the latest ordinary reply', async t => {
   for (const askContext of [undefined, { question: ' ', choices: ['Alpha'] }]) {
     const f = fixture({ purpose: { kind: 'ask', requestId: 'question' } });
@@ -374,18 +489,17 @@ test('a hidden ask task retains context across session switching and retry, not 
   const f = fixture({ purpose: { kind: 'ask', requestId: 'reused' } });
   t.after(() => f.service.dispose());
   await f.service.start();
-  f.host.set({ ...f.host.getSnapshot(), sessionId: 'other' });
   f.service.clearTarget(f.original.id);
   await turn();
   f.result.reject(new SpeechError('NETWORK', 'Synthetic failure'));
   await turn();
-  const other = { ...draft('other-session', { kind: 'ask', requestId: 'reused' }), sessionId: 'other' };
+  const other = draft('other-session', { kind: 'ask', requestId: 'reused' });
   other.state.set({ ...other.getSnapshot(), askContext: { question: 'Other session question' } });
-  f.service.setTarget({ draft: other, disabled: false, sendBlocked: false, selection: () => ({ start: 0, end: 0 }) });
+  f.service.setTarget({ draft: other, available: () => true, disabled: false, sendBlocked: false, selection: () => ({ start: 0, end: 0 }) });
   assert.equal(f.service.canRetry(f.original.id), false);
   f.original.state.set({ ...f.original.getSnapshot(), askContext: { question: 'Updated original question' } });
-  f.host.set({ ...f.host.getSnapshot(), sessionId: 's' });
-  f.service.setTarget({ draft: f.original, disabled: false, sendBlocked: false, selection: () => ({ start: 0, end: 0 }) });
+  f.service.clearTarget(other.id);
+  f.service.setTarget({ draft: f.original, available: () => true, disabled: false, sendBlocked: false, selection: () => ({ start: 0, end: 0 }) });
   const retried = f.service.retry();
   f.retryResult.resolve('original answer'); await retried;
   assert.equal(f.values().captures, 1);
@@ -401,7 +515,8 @@ test('retired ask audio cannot supply context or results to a reused request ID 
   f.original.state.set({ ...f.original.getSnapshot(), retired: true, askContext: undefined });
   const replacement = draft('new-ask-lifetime', { kind: 'ask', requestId: 'reused' });
   replacement.state.set({ ...replacement.getSnapshot(), askContext: { question: 'Replacement question?', choices: ['Gamma'] } });
-  f.service.setTarget({ draft: replacement, disabled: false, sendBlocked: false, selection: () => ({ start: 0, end: 0 }) });
+  f.service.clearTarget(f.original.id);
+  f.service.setTarget({ draft: replacement, available: () => true, disabled: false, sendBlocked: false, selection: () => ({ start: 0, end: 0 }) });
   assert.equal(f.service.hasRetainedRecording(f.original.id), false);
   f.result.resolve('late original answer'); await stopped;
   assert.equal(replacement.getSnapshot().text, 'hello world');
@@ -433,7 +548,7 @@ test('a recovered result never redirects to another draft, including reused nati
   assert.equal(f.service.getSnapshot().focus, null);
   assert.equal(f.service.getSnapshot(f.original.id).recovery?.text, 'recognized');
   const replacement = draft('different-lifetime', { kind: 'ask', requestId: 'reused' });
-  f.service.setTarget({ draft: replacement, disabled: false, sendBlocked: false, selection: () => ({ start: 0, end: 0 }) });
+  f.service.setTarget({ draft: replacement, available: () => true, disabled: false, sendBlocked: false, selection: () => ({ start: 0, end: 0 }) });
   assert.equal(f.service.canInsert(), false);
   f.service.insertRecovery();
   assert.equal(replacement.getSnapshot().text, 'hello world');
@@ -451,7 +566,7 @@ test('successful insertion never adds a notice above the editor', async t => {
   assert.equal(f.service.getSnapshot().notice, null);
   f.service.clearTarget(f.original.id);
   const answer = draft('answer', { kind: 'ask', requestId: 'new-question' });
-  f.service.setTarget({ draft: answer, disabled: false, sendBlocked: false, selection: () => ({ start: 0, end: 0 }) });
+  f.service.setTarget({ draft: answer, available: () => true, disabled: false, sendBlocked: false, selection: () => ({ start: 0, end: 0 }) });
   assert.equal(f.service.getSnapshot().notice, null);
   assert.equal(answer.getSnapshot().text, 'hello world');
 });
@@ -462,10 +577,13 @@ test('permission late grants are cancelled after input loss or module abort, wit
     await new Promise<void>(resolve => setImmediate(resolve));
     assert.equal(f.service.getSnapshot().phase, 'permission');
     if (cause === 'unmount') f.service.clearTarget(f.original.id);
-    if (cause === 'navigation') f.host.set({ ...f.host.getSnapshot(), sessionId: 'other' });
+    if (cause === 'navigation') f.service.clearTarget(f.original.id);
     if (cause === 'abort') f.controller.abort();
-    if (cause === 'no-free-text') f.service.setTarget({ draft: f.original, disabled: false, sendBlocked: true, selection: () => ({ start: 0, end: 0 }) });
-    if (cause === 'replacement') f.service.setTarget({ draft: draft('replacement'), disabled: false, sendBlocked: false, selection: () => ({ start: 0, end: 0 }) });
+    if (cause === 'no-free-text') f.service.setTarget({ draft: f.original, available: () => true, disabled: false, sendBlocked: true, selection: () => ({ start: 0, end: 0 }) });
+    if (cause === 'replacement') {
+      f.service.clearTarget(f.original.id);
+      f.service.setTarget({ draft: draft('replacement'), available: () => true, disabled: false, sendBlocked: false, selection: () => ({ start: 0, end: 0 }) });
+    }
     assert.equal(f.original.getSnapshot().blocks.length, 0, cause);
     f.permission.resolve(f.recording); await starting;
     assert.equal(f.values().cancelled, 1, cause);
@@ -589,14 +707,15 @@ test('reaching the recording limit automatically transcribes once without native
 });
 test('pending, unconfirmed, peer blocks and free-text gates prevent capture and recovery insertion', async t => {
   const f = fixture(); t.after(() => f.service.dispose());
-  for (const patch of [{ pending: true }, { unconfirmed: true }, { blocks: [{ id: 'peer', reason: 'peer' }] }]) {
+  for (const patch of [{ editable: false }, { submittable: false }, { retired: true },
+    { pending: true }, { unconfirmed: true }, { blocks: [{ id: 'peer', reason: 'peer' }] }]) {
     const before = f.original.getSnapshot();
     f.original.state.set({ ...before, ...patch });
     assert.equal(f.service.canStart(), false); await f.service.start();
     assert.equal(f.service.getSnapshot().phase, 'idle');
     f.original.state.set(before);
   }
-  f.service.setTarget({ draft: f.original, disabled: false, sendBlocked: true, selection: () => ({ start: 0, end: 0 }) });
+  f.service.setTarget({ draft: f.original, available: () => true, disabled: false, sendBlocked: true, selection: () => ({ start: 0, end: 0 }) });
   assert.equal(f.service.canStart(), false);
 });
 test('held limit waits for release, keeps its lease and can still be cancelled without text or retry', async t => {
@@ -642,7 +761,7 @@ test('retry preserves original revision/context, ignores superseded completions 
   f.fail(new SpeechError('NETWORK', 'Disconnected'));
   assert.equal(f.original.getSnapshot().blocks.length, 0);
   f.original.editText('manual correction');
-  f.chatWindow.set({ ...f.chatWindow.getSnapshot(), messages: [] });
+  f.original.state.set({ ...f.original.getSnapshot(), referenceText: undefined });
   const retry = f.service.retry();
   assert.equal(f.original.getSnapshot().blocks.length, 1);
   f.result.resolve('stale first result'); await old;
@@ -658,7 +777,8 @@ test('target replacement hides retained audio without discarding or redirecting 
   const f = fixture({ purpose: { kind: 'ask', requestId: 'reused' } }); t.after(() => f.service.dispose());
   await f.service.start(); f.fail(new SpeechError('NETWORK', 'Disconnected'));
   assert.equal(f.service.canRetry(), true);
-  f.service.setTarget({ draft: draft('new-lifetime', { kind: 'ask', requestId: 'reused' }),
+  f.service.clearTarget(f.original.id);
+  f.service.setTarget({ draft: draft('new-lifetime', { kind: 'ask', requestId: 'reused' }), available: () => true,
     disabled: false, sendBlocked: false, selection: () => ({ start: 0, end: 0 }) });
   assert.equal(f.service.canRetry(), false);
   assert.equal(f.values().cancelled, 0);

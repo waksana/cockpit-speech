@@ -39,7 +39,8 @@ The returned WebSocket origin/path is locally constructed and strictly validated
 
 ## Capture and network are independent
 
-- `context.ts` preserves the ordinary prompt/plan chat-window policy. For an
+- `context.ts` bounds ordinary prompt/plan owner `referenceText` to the last
+  1,000 Unicode code points. It never reads background Chat or session state. For an
   ask draft, `speech.ts` reads only `snapshot.askContext` from its exact host-bound
   draft at capture start, before any asynchronous setup. The optional typed host
   field contains only that occurrence's question and choices, not arbitrary
@@ -126,13 +127,13 @@ The returned WebSocket origin/path is locally constructed and strictly validated
   written. Only normal active hold release authorizes automatic submission.
   Recovery insertion releases retained audio only after a successful guarded
   write; displayed recovery controls do not depend on a later successful retry.
-- `draftSubmissionVersion: 1` plus explicit `sends: ['draft']` permits
+- `draftSubmissionVersion: 2` plus explicit `sends: ['draft']` permits
   `draft.captureSend()` on active hold release. Its one-shot `send(revision)`
-  uses original purpose/session, host native field projection, schema mutation
+  uses the original owner adapter, full field projection, action revision, schema mutation
   checkpoint and ACK handling. Speech calls it only after all VAD results finish
   and the final guarded text checkpoint succeeds. Navigation after release
   preserves intent; pre-release interruption and button stop never capture one.
-  Transcription retry keeps intent, but native blocked/unknown outcomes enter
+  Transcription retry keeps intent, but blocked/rejected/unknown or local settlement failures enter
   `send-error`, not transcription retry. Audio remains until confirmed delivery
   or explicit discard/retirement/teardown. Empty transcription never sends.
 
@@ -145,8 +146,8 @@ appears in their query. Expiry blocks new connections, not necessarily open ones
 
 The `composerInput` wrapper renders the real Base and a fixed-size microphone
 sibling, preserving controlled props, native events and React 19 ref cleanup.
-The native send remains host-owned. Prompt/ask/plan and free-text gates are
-unchanged; File remains prompt-only on the left.
+The send remains owner-controlled. Prompt/ask/plan and free-text gates are
+preserved through public draft facts, not background Chat connection state.
 
 One circular button provides idle microphone, disabled startup spinner, solid
 red stop square, disabled sending/transcription spinner and red manual retry.
@@ -187,7 +188,7 @@ visibility loss, pointer capture loss, window blur, resize and Tab interrupt:
 they detach gesture ownership and stop/transcribe without discarding audio.
 Escape and upward swipe still explicitly cancel. Late release/capture-loss events
 cannot cancel an interrupted background task. Unrelated scrolling does not
-interrupt. Button capture receives the same page/host interruption handling.
+interrupt. Button capture receives the same page/editor-surface interruption handling.
 
 Both hold and microphone-button recordings use the same status feedback.
 The status marker's 7px dot scales from 1 to 2; the stop icon never scales.
@@ -209,9 +210,9 @@ start. F8 retains its existing no-completion-selection/focus policy.
 physical F8 latch across composer registration/replacement. Capture phase keeps
 ordinary controls' bubbling handlers from hiding keydown/keyup. It checks the
 public editor ref, document focus, target visibility/writability and native modal
-inertness, plus live host/draft gates; it never queries host-private selectors.
+inertness, plus owner editable/submittable/retired facts; it never queries host-private selectors.
 Focus on body, a sidebar, button, link, another editor or other control is not a
-veto. Neither is a nonmodal dialog/popover or an ARIA role alone: the chat target
+veto. Neither is a nonmodal dialog/popover or an ARIA role alone: the editor
 must actually become unavailable. An empty textarea need not be focused.
 Ambiguous visible composers fail closed. Keyboard starts use the existing hold
 mode with completion autofocus disabled, so an interrupted background result
@@ -297,11 +298,12 @@ CI installs directly from the registry using its repository `GITHUB_TOKEN`;
 local PAT access alone does not establish Actions package access.
 
 Integration tests are a separate, explicit host pairing. The exact supported
-source is `7d69b6f348e17f098bc5562fdbec317e8e2e4ba6`, recorded in
-`tooling/host-compatibility.json`. SDK 0.2.0 semver does not imply a minimum host
-version: frontend API v2 and all existing UI/chat/input/draft capability checks
+source is `0dcfd6688b4c01b3f29776ee804b901612a6ae9b`, recorded in
+`tooling/host-compatibility.json`. SDK 0.7.0 semver does not imply a minimum host
+version: frontend API v3 and the declared public UI/component/owner/draft capability checks
 remain required. Existing persisted draft encodings are preserved. This source
-migration does not create a new runtime release or deploy either repository.
+migration does not deploy either repository; merging attempts the automatic
+Rolling publication described in [Releases](releases.md).
 
 In an isolated clean checkout of that exact host commit, install its frozen
 dependencies and build its protocol/SDK workspace packages using the host's own
@@ -331,21 +333,31 @@ This Linux user-scope example is environment-specific; use equivalent isolation
 and limits elsewhere. The browser Lab uses loopback port 5187 with `strictPort`;
 confirm it is free instead of stopping an unrelated process.
 
-### Page-wide F8 browser regression (#27)
+### Page-wide F8 and public-owner browser regression
 
 `scripts/browser/f8.browser.mjs` runs Node's existing test runner with an already
 installed Puppeteer driver/Chromium, the **compiled** `dist/web/index.js`, and the
-exact pinned host's existing Chat Lab (no host edits). The fixture injects only
-synthetic media, credentials, transcript results and native ACK responses into
-the real host module runtime. Keyboard input uses browser automation's actual
-keydown/keyup path, not direct handler calls. Browser requests are loopback-only
-and the Lab CSP excludes cloud sockets.
+exact pinned host's existing Chat Lab (no host edits). The fixture forwards the
+compiled module's `frontendApiVersion` export to the real loader and verifies v3,
+public components v1, draft owner v1 and draft submission v2 negotiation.
+Synthetic media, credentials, transcript results and delivery responses replace
+external I/O, not draft tokens or SpeechService. A second fixture module uses
+public `createDraft` and `components.get('composer')` with its own owner adapter;
+the same registered SpeechService binds both Chat and generic drafts. This is an
+Assistant-like synthetic owner, not integration coverage of the external Task
+module. Keyboard and touch input use browser automation's actual event paths.
+Browser requests are loopback-only and the Lab CSP excludes cloud sockets.
 
 After `pnpm build`, start the Lab and run the browser suite:
 
 ```sh
-node scripts/browser/serve-chat-lab.mjs /absolute/pinned-host-source
-PUPPETEER_MODULE=/absolute/installed/puppeteer-entry.js \
+mkdir -p scripts/browser/.state/{home,copilot,cockpit}
+HOME="$PWD/scripts/browser/.state/home" \
+  COPILOT_HOME="$PWD/scripts/browser/.state/copilot" \
+  COCKPIT_HOME="$PWD/scripts/browser/.state/cockpit" \
+  node scripts/browser/serve-chat-lab.mjs /absolute/pinned-host-source
+# In another shell, from this module worktree:
+TMPDIR="$PWD" PUPPETEER_MODULE=/absolute/installed/puppeteer-entry.js \
   CHROME_BIN=/absolute/chrome \
   node --test scripts/browser/f8.browser.mjs
 ```
@@ -355,12 +367,29 @@ bundle (its `puppeteer` export). No test dependency is added to the shipping
 module. On isolated Linux runners without a usable Chromium sandbox,
 `CHROME_NO_SANDBOX=1` is an explicit local-fixture-only opt-in; it does not change
 the host or production browser configuration. The default retains the sandbox.
+Use full Chromium rather than headless-shell for the real window-departure test.
+`TMPDIR` keeps browser-generated profiles/socket directories inside the worktree;
+keep its absolute path short enough for Linux Unix-domain sockets. Stop the Lab
+and remove only this run's generated state/profiles and isolated host checkout
+after verification. Never use a production checkout/server for this suite.
 
 Coverage includes first open/body before any textarea click, clicked transcript,
 sidebar/button/link/select/checkbox/other editor focus, unchanged focus/selection,
 stopped event bubbling, textarea focus, nonempty drafts, native/nonmodal dialogs,
 popover, unavailable targets, late permission, repeat/modifiers/IME/Escape,
 actual window departure, session switches before/after release, and teardown.
+Public-owner coverage adds Chat and a generic composer in the same DOM, modal
+exclusion of background Chat, DOM-only modal close restoring microphone/hold
+affordances, modal interruption of button capture without observer reentrancy,
+nonmodal ambiguity, independence from the background
+host view, close/reopen and retired-occurrence late results, action/reply/schema
+ABA changes, projected fields and ACK, rejected/unknown/local-settlement outcomes,
+denied send permission, microphone rejection, owner-scoped reference/ask context,
+generic IME/focus, mobile tap/hold/swipe cancellation, and a mobile reply change
+before transcription with late results on either side of normal touch release.
+Every case starts with
+fresh isolated browser storage; close/reopen assertions retain the same owner
+within a case, including unresolved transaction evidence.
 The baseline 0.8.1 compiled module started on body/textarea but refused buttons
 and selects; the focusable transcript also matched its excluded `[tabindex]`
 selector. That old synthetic body-only success did not establish page-wide F8.

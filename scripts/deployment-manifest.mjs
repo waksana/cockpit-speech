@@ -5,7 +5,7 @@ import { identity } from './rolling-identity.mjs';
 
 const vocabulary = {
   apiVersion: 'frontend-api', uiVersion: 'ui', uiSurfaceVersion: 'uiSurface',
-  chatWindowVersion: 'chatWindow', composerInputVersion: 'composerInput',
+  publicComponentsVersion: 'publicComponents', draftOwnerVersion: 'draftOwner', composerInputVersion: 'composerInput',
   draftLifecycleVersion: 'draftLifecycle', draftSubmissionVersion: 'draftSubmission',
 };
 

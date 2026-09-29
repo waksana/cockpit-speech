@@ -1,8 +1,8 @@
 # Cockpit Speech
 
 The current source builds with the published
-`@waksana/cockpit-module-sdk@0.2.0` from GitHub Packages. Its exact supported
-historical tested host pairing is Cockpit commit `7d69b6f348e17f098bc5562fdbec317e8e2e4ba6`,
+`@waksana/cockpit-module-sdk@0.7.0` from GitHub Packages. Its exact integration
+host pairing is Cockpit commit `0dcfd6688b4c01b3f29776ee804b901612a6ae9b`,
 recorded separately in `tooling/host-compatibility.json`.
 SDK semver is not a host compatibility check.
 Current Rolling packages carry source-derived API and capability requirements;
@@ -12,8 +12,10 @@ Recovery UI consumes public `ck-surface` and `ck-actions`; activation requires
 both `context.uiVersion === 1` and `context.uiSurfaceVersion === 1` before
 registering contributions. Missing/unsupported surface capability is rejected.
 These are current-source capabilities, not a claim about historical
-host assets. Gesture, recovery limits, native input and submission ownership
-are unchanged; no private host components or separate React runtime are used.
+host assets. The bundle exports `frontendApiVersion = 3` and contributes once
+to the unified public component chain. Chat and generic draft owners such as
+Assistant use the same enhancement; their owner adapters retain submission
+routing. No private host components or separate React runtime are used.
 
 Speech requests the browser's native leave confirmation while any draft,
 including a hidden draft, owns active capture/processing, retained audio/results
@@ -34,7 +36,7 @@ speech SDK, postprocessor or settings page is required.
 ## One-button dictation
 
 The fixed circular microphone follows the actual editor and precedes native
-send, for prompt, ask and plan inputs. File stays on the left and prompt-only.
+send, for prompt, ask and plan inputs, including generic owner composers.
 Native free-text restrictions leave the microphone visible but disabled.
 
 **Microphone -> disabled spinner -> solid red stop square -> disabled spinner
@@ -81,31 +83,34 @@ Preparation feedback starts only when microphone startup begins. Once ready, the
 row's red dot changes size with captured volume; the button is a static red stop
 square. Text can appear while held. A normal active release stops capture, uploads
 its remaining tail and waits for the complete transcription, then submits the
-original input draft once through its normal native send logic.
+original input draft once through its fixed owner submission adapter.
 Release before readiness cancels instead. Clicking the microphone uses the
 same status row and clicking the stop square ends capture.
 There is no full-screen shade or parallel editor.
 
-Release locks the original input's send intent: a prompt sends an ordinary
+Release locks the original input's send intent. For native Chat, a prompt sends an ordinary
 message to its original session (using the native queue even if an ask appears
 after release); an ask answers that original live question; a plan input sends
-that original plan feedback. It never uses the newly visible input's submit.
+that original plan feedback. An Assistant draft uses only its own receiving
+adapter, never background Chat's native send. Speech does not inspect a topic
+or session to route any of these. It never uses the newly visible input's submit.
 Session/tab navigation after release does not revoke or redirect the intent.
 Navigation before release instead stops/transcribes into the original draft
 without sending. Streamed VAD turns never submit individually.
 
 The normal submission includes the original draft's existing attachments. Any
-external text or attachment/schema-content change after release prevents
+external text, reply/action revision or attachment/schema-content change after release prevents
 automatic sending and preserves the recording/result for manual confirmation.
 If no words are recognized, nothing is sent, even when attachments exist; they
 remain in the draft. A retired decision/session cannot submit.
 
 Transcription failure still permits manual replay; a released hold keeps its
 send intent for the successful replay, subject to the original draft guards.
-Native submission failure or uncertain acknowledgement instead preserves audio,
+Rejected submission or uncertain acknowledgement instead preserves audio,
 text and a distinct send error, without a module resend button or another
-transcription attempt. Check the original session's messages/queue and use its
-normal host-controlled confirmation/send workflow deliberately. Clear only
+transcription attempt. This includes business acceptance followed by incomplete
+local settlement. Check the original input's submission record and use its
+normal owner-controlled confirmation/send workflow deliberately. Clear only
 discards local speech resources; it cannot retract an already-submitted message.
 
 Swipe upward 64 CSS pixels from the initial press to cancel immediately, even
@@ -131,7 +136,8 @@ input, tap first, then use native long-press paste. Keyboard Tab still focuses
 the real textarea; the gesture layer adds no tab stop. The independent microphone
 button remains the accessible alternative and retains its existing behavior.
 Speech requires the host's `draftLifecycleVersion: 1` and
-`draftSubmissionVersion: 1` capabilities
+`draftSubmissionVersion: 2`, `draftOwnerVersion: 1` and
+`publicComponentsVersion: 1` capabilities
 as well as Cockpit's additive public UI classes. It uses the
 existing `composerEditor` middleware for the full-width status row and leaves
 queue/question layout and scrolling entirely to the host. Input hint size,
@@ -159,7 +165,7 @@ count as text). Existing attachments are allowed and keep the normal #16 send
 guards. Nonempty drafts keep native editing; use the microphone button for
 selection-based dictation without automatic sending.
 
-F8 is gated by the chat target, not by the focused control or the mere presence
+F8 is gated by registered draft owners and real editor refs, not by the focused control or the mere presence
 of a dialog/popover. Hidden, inert, offscreen, disabled, readonly or unavailable
 composers and IME composition remain excluded. A native modal dialog makes a
 chat editor outside it unavailable; a current writable editor inside it can
@@ -174,7 +180,7 @@ permission and releasing before actual readiness also cannot send; late media
 grants are closed.
 
 Only normal F8 keyup after readiness captures the existing original-draft send
-intent. Prompt, ask and plan use exactly the same native submission/ACK path as
+intent. Every owner uses exactly the same submission/ACK path as
 pointer hold, including original-target delivery after release and navigation,
 manual transcription retry, no send for empty recognition, external edit/schema
 guards, and no blind resend after an uncertain ACK. The microphone stop button
@@ -280,14 +286,12 @@ only an explicit retry can resume updates. Inserting or discarding a partial
 recovery result also ends its retained retry operation, so those controls never
 leave hidden replay work behind.
 
-For ordinary prompt inputs (and unchanged plan inputs), the excerpt is the
-**last 1,000 Unicode code points** of the newest eligible
-completed root assistant reply, captured when recording starts. Eligibility needs
-the matching native session origin, nonblank native message ID and text, and no
-agent ID or subtype. User/tool/system messages, children, subagents, skill output
-and incomplete/unknown-origin messages are excluded. Stale/unavailable windows
-contribute no context. The module uses the public read-only chat window, without
-DOM scraping or fetching additional history.
+For ordinary prompt and plan inputs, the excerpt is the **last 1,000 Unicode
+code points** of the owner's public `snapshot.referenceText`, captured when
+recording starts. The owner supplies only eligible already-visible reply text;
+Chat and Assistant each supply their own reference. Missing or blank text means
+no reference. Speech never reads a background chat window, identifies a source
+session/topic, scrapes message DOM or fetches additional history.
 
 For `ask_user` answer inputs, the reference instead comes from the captured
 draft's public, read-only `askContext`: its current question and ordered choices,
@@ -316,13 +320,14 @@ captured insertion point/revision/context, result and error independently. The
 host stores successfully inserted text as an ordinary draft, using its normal
 draft persistence; the module never writes audio to IndexedDB/localStorage.
 
-Switching sessions, replacing prompt with ask, hiding the tab or losing the host
-connection ends capture, but does not cancel transmission or clear failed audio.
+Unmounting/replacing an editor, hiding the tab or losing that owner's
+availability ends capture, but does not cancel transmission or clear failed audio.
+Background Chat connection or selection changes do not gate a usable Assistant.
 An already-stopped task keeps going and writes back only to its original draft,
 even while that input is absent. Returning to a failed input restores its manual
 retry. Conflicts retain both audio and recognized text until explicit recovery
 or discard. Draft-only tasks release audio after reliable insertion; released
-holds retain it until native submission is acknowledged. Explicit discard, authoritative permanent draft
+holds retain it until owner submission is acknowledged. Explicit discard, authoritative permanent draft
 retirement (an ended decision or deleted session), a confirmed under-100-ms
 recording, or module/page teardown releases the recording. A hidden or unloaded
 session is not a deleted session.
@@ -368,12 +373,14 @@ and final transcription to 90 seconds. All failure paths release hardware and
 connections. Device/context listeners cover initialization and capture; normal
 initial resume and deliberate stop do not create false failures.
 
-The exact draft lifetime, session, purpose, revision, selection and context stay
-with the recording. A lease blocks native send while capturing or transcribing,
+The exact draft lifetime, purpose, text/action revision, selection and context stay
+with the recording. A lease blocks owner submission while capturing or transcribing,
 and is released on failure, finish or cancellation. Retry reacquires the original
 draft lease. Background completion uses the host's revision-guarded text write,
 which rejects pending/unconfirmed sends, competing leases, retirement and
-persistence errors. Manual edits win; recovery never follows a replacement input or a
+persistence errors. Reply/action changes also prevent automatic text writes and
+recovery insertion into the changed target; the original result remains copyable.
+Manual edits win; recovery never follows a replacement input or a
 reused request ID. Old connection callbacks and superseded completions cannot
 write text. Azure can reuse a session ID for the same credential, so that ID is
 not used as a local ownership key. Final text must match the committed item.
@@ -401,9 +408,10 @@ mode or global virtual store is needed. See [pnpm's store explanation](https://p
 Requires Node **24.20.0**, pnpm **10.34.5** and TypeScript **5.9.3**. The exact
 SDK dependency is in `package.json`; `pnpm-lock.yaml` records its registry
 tarball and SHA-512 integrity. A clean source build needs no Cockpit checkout,
-SDK export, workspace link or local tarball. Frontend API v2/UI v1,
-`chatWindowVersion: 1`, `composerInputVersion: 1`, `draftLifecycleVersion: 1`
-and `draftSubmissionVersion: 1` plus `uiSurfaceVersion: 1` are independently required.
+SDK export, workspace link or local tarball. Frontend API v3/UI v1,
+`publicComponentsVersion: 1`, `draftOwnerVersion: 1`, `composerInputVersion: 1`,
+`draftLifecycleVersion: 1`, `draftSubmissionVersion: 2` and
+`uiSurfaceVersion: 1` are independently required.
 
 GitHub Packages requires authentication even for this public SDK. Use a classic
 PAT with `read:packages` and package access via the `NODE_AUTH_TOKEN` environment

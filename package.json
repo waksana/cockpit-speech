@@ -14,7 +14,7 @@
     "verify:package": "node scripts/verify-package.mjs"
   },
   "devDependencies": {
-    "@waksana/cockpit-module-sdk": "0.2.0",
+    "@waksana/cockpit-module-sdk": "0.7.0",
     "@types/node": "25.9.5",
     "@types/react": "19.2.18",
     "lucide-static": "1.46.0",

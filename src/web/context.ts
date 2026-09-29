@@ -1,4 +1,4 @@
-import type { ChatWindowSnapshot, DraftAskContext, HostSnapshot } from '@waksana/cockpit-module-sdk/frontend';
+import type { DraftAskContext } from '@waksana/cockpit-module-sdk/frontend';
 import { MAX_CONTEXT_POINTS } from '../shared/limits.ts';
 
 /** Question first, then ordered choices within the same total Unicode budget. */
@@ -29,15 +29,8 @@ export function askContext(ask: Readonly<DraftAskContext> | undefined): string |
   return text;
 }
 
-/** Module policy: the last 1,000 Unicode code points of the newest eligible root. */
-export function recentContext(host: Readonly<HostSnapshot>, window: Readonly<ChatWindowSnapshot>, sessionId: string): string | undefined {
-  if (!host.connected || !host.visible || host.sessionId !== sessionId || window.sessionId !== sessionId || window.status !== 'ready') return;
-  for (let index = window.messages.length - 1; index >= 0; index--) {
-    const message = window.messages[index]!;
-    if (message.role === 'assistant' && message.complete && message.subtype === undefined
-      && message.origin?.sessionId === sessionId && message.origin.messageId.trim()
-      && message.origin.agentId === undefined && message.text.trim()) {
-      return [...message.text.trim()].slice(-MAX_CONTEXT_POINTS).join('');
-    }
-  }
+/** The owner supplies already-visible reference text, never a history reader. */
+export function recentContext(referenceText: string | undefined): string | undefined {
+  const text = referenceText?.trim();
+  return text ? [...text].slice(-MAX_CONTEXT_POINTS).join('') : undefined;
 }

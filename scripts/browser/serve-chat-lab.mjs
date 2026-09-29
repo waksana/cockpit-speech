@@ -13,7 +13,7 @@ process.env.COCKPIT_CHAT_LAB = '1';
 const { createServer } = await import(pathToFileURL(resolve(host, 'apps/web/node_modules/vite/dist/node/index.js')).href);
 const server = await createServer({
   root: resolve(host, 'apps/web'),
-  server: { host: '127.0.0.1', port: 5187, strictPort: true, fs: { allow: [host, root] } },
+  server: { host: '127.0.0.1', port: 5187, strictPort: true, hmr: false, fs: { allow: [host, root] } },
 });
 await server.listen();
 server.printUrls();

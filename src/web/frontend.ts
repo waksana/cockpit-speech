@@ -1,7 +1,7 @@
 import type { ComposerInputProps, ModuleFrontendContext } from '@waksana/cockpit-module-sdk/frontend';
 import type { HTMLAttributes, Ref } from 'react';
 import { HoldGesture } from './hold.ts';
-import { KeyboardHold } from './keyboard.ts';
+import { KeyboardHold, keyboardSurfaceAvailable } from './keyboard.ts';
 import { prepareRecording } from './recorder.ts';
 import { SpeechService } from './speech.ts';
 import type { Recovery } from './speech.ts';
@@ -32,12 +32,12 @@ export function createSpeechFrontend(context: ModuleFrontendContext) {
   const speech = context.state.register({
     id: 'speech',
     create: () => new SpeechService({
-      signal: context.signal, host: context.state.host, chatWindow: context.state.chatWindow,
+      signal: context.signal,
       prepare: prepareRecording, session: sessionClient(context.request, context.signal), report: context.report,
     }),
     dispose: service => service.dispose(),
   }).get();
-  const keyboard = new KeyboardHold();
+  const keyboard = new KeyboardHold(speech.refreshTargets);
   const unsubscribeKeyboard = speech.subscribe(keyboard.refresh);
   const unprotect = protectSpeechUnload(speech, window);
   const dispose = () => {
@@ -67,11 +67,11 @@ export function createSpeechFrontend(context: ModuleFrontendContext) {
     const ref = React.useMemo(() => composeEditorRef(input, props.editorRef), [props.editorRef]);
     const state = useSpeech(draft.id);
     const snapshot = React.useSyncExternalStore(draft.subscribe.bind(draft), draft.getSnapshot.bind(draft));
-    const host = React.useSyncExternalStore(context.state.host.subscribe, context.state.host.getSnapshot);
+    const available = React.useCallback(() => !!input.current && keyboardSurfaceAvailable(input.current), []);
     const gesture = React.useMemo(() => new HoldGesture({
       allowed: () => !latest.current.disabled && !latest.current.sendBlocked && latest.current.value === ''
         && draft.getSnapshot().text === '' && !!input.current && input.current.ownerDocument.activeElement !== input.current
-        && speech.canStart(draft.id),
+        && available() && speech.canStart(draft.id),
       bounds: () => input.current?.getBoundingClientRect(),
       phase: () => speech.getSnapshot(draft.id).phase,
       start: () => { void speech.start('hold', draft.id); },
@@ -84,9 +84,9 @@ export function createSpeechFrontend(context: ModuleFrontendContext) {
     React.useLayoutEffect(() => keyboard.register({
       editor: () => input.current,
       available: () => {
-        const host = context.state.host.getSnapshot();
-        return !latest.current.disabled && !latest.current.sendBlocked && host.visible && host.connected
-          && host.sessionId === draft.sessionId && !draft.getSnapshot().retired;
+        const snapshot = draft.getSnapshot();
+        return !latest.current.disabled && !latest.current.sendBlocked
+          && snapshot.editable && snapshot.submittable && !snapshot.retired;
       },
       empty: () => latest.current.value === '' && draft.getSnapshot().text === '' && input.current?.value === '',
       canStart: () => !gesture.getSnapshot() && speech.canStart(draft.id),
@@ -95,10 +95,10 @@ export function createSpeechFrontend(context: ModuleFrontendContext) {
       phase: () => speech.getSnapshot(draft.id).phase,
       start: () => { void speech.start('hold', draft.id, { focusOnCompletion: false }); },
       release: () => { void speech.releaseHold(draft.id); },
-      interrupt: () => speech.interrupt(draft.id),
+      interrupt: () => { gesture.interrupt(); speech.interrupt(draft.id); },
       cancel: () => speech.cancel(draft.id),
     }, document, window), [draft, gesture]);
-    React.useLayoutEffect(keyboard.refresh, [props.value, props.disabled, props.sendBlocked, snapshot, host]);
+    React.useLayoutEffect(keyboard.refresh, [props.value, props.disabled, props.sendBlocked, snapshot]);
     React.useLayoutEffect(() => {
       const interrupt = () => { gesture.interrupt(); speech.interrupt(draft.id); };
       const visibility = () => { if (document.visibilityState !== 'visible') interrupt(); };
@@ -121,21 +121,24 @@ export function createSpeechFrontend(context: ModuleFrontendContext) {
         document.removeEventListener('visibilitychange', visibility);
       };
     }, [gesture, draft.id]);
+    const action = React.useRef(snapshot.actionRevision);
     React.useLayoutEffect(() => {
+      const changedAction = action.current !== snapshot.actionRevision;
+      action.current = snapshot.actionRevision;
       if (focused || ((props.value !== '' || snapshot.text !== '') && !speech.ownsDraft(draft.id)) || props.disabled || props.sendBlocked
-        || !host.visible || !host.connected || host.sessionId !== draft.sessionId) gesture.interrupt();
-    }, [gesture, focused, props.value, snapshot.text, props.disabled, props.sendBlocked, host, draft.id, draft.sessionId]);
+        || changedAction || !snapshot.editable || !snapshot.submittable || snapshot.retired) gesture.interrupt();
+    }, [gesture, focused, props.value, snapshot, props.disabled, props.sendBlocked, draft.id]);
     const selection = React.useCallback(() => ({
       start: input.current?.selectionStart ?? draft.getSnapshot().text.length,
       end: input.current?.selectionEnd ?? draft.getSnapshot().text.length,
     }), [draft]);
     React.useLayoutEffect(() => () => speech.clearTarget(draft.id), [draft]);
     React.useLayoutEffect(() => {
-      speech.setTarget({ draft, disabled: props.disabled, sendBlocked: props.sendBlocked, selection });
-    }, [draft, props.disabled, props.sendBlocked, selection]);
+      speech.setTarget({ draft, disabled: props.disabled, sendBlocked: props.sendBlocked, selection, available });
+    }, [draft, props.disabled, props.sendBlocked, selection, available, snapshot.editable, snapshot.submittable, snapshot.retired]);
     React.useLayoutEffect(() => {
       const focus = state.focus;
-      if (!focus || focus.id !== draft.id || focus.revision !== snapshot.revision || props.disabled) return;
+      if (!focus || focus.id !== draft.id || focus.revision !== snapshot.revision || props.disabled || !available()) return;
       if (focus.activate) input.current?.focus();
       input.current?.setSelectionRange(focus.selection.start, focus.selection.end);
     }, [state.focus, draft.id, snapshot.revision, props.disabled]);

@@ -61,8 +61,8 @@ test('main stays dev and build display does not change independent SDK identity'
   const product = await moduleProduct(root);
   assert.deepEqual(product, {
     kind: 'module', id: 'cockpit-speech', hostApi: { min: 1, max: 1 },
-    requiresCapabilities: ['chatWindow.v1', 'composerInput.v1', 'draftLifecycle.v1', 'draftSubmission.v1',
-      'frontend-api.v2', 'module-api.v1', 'ui.v1', 'uiSurface.v1'],
+    requiresCapabilities: ['composerInput.v1', 'draftLifecycle.v1', 'draftOwner.v1', 'draftSubmission.v2',
+      'frontend-api.v3', 'module-api.v1', 'publicComponents.v1', 'ui.v1', 'uiSurface.v1'],
     requiredIntents: [], databases: [], migrations: [],
   });
 });
