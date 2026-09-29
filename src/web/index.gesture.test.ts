@@ -9,7 +9,7 @@ import { keyboardDOM } from './keyboard.fixture.test.ts';
 type Element = { type: unknown; props: Record<string, unknown>; children: (Element | string | null)[] };
 const settle = () => new Promise<void>(resolve => setImmediate(resolve));
 
-async function fixture(t: TestContext, pointerType: 'mouse' | 'touch') {
+async function fixture(t: TestContext, pointerType: 'mouse' | 'touch', transcribe = false) {
   t.mock.timers.enable({ apis: ['setTimeout'] });
   let captures = 0, contexts = 0, requests = 0, trackStops = 0, focuses = 0, leases = 0, intents = 0;
   let grant!: (stream: unknown) => void;
@@ -24,9 +24,27 @@ async function fixture(t: TestContext, pointerType: 'mouse' | 'touch') {
   const restoreGlobals: (() => void)[] = [];
   const dom = keyboardDOM();
   const controller = new AbortController();
+  const sockets: Socket[] = [];
+  class Socket {
+    onopen: (() => void) | null = null;
+    onmessage: ((event: { data: string }) => void) | null = null;
+    onerror: (() => void) | null = null;
+    onclose: (() => void) | null = null;
+    bufferedAmount = 0;
+    sent: { type: string; session?: unknown }[] = [];
+    constructor() { sockets.push(this); queueMicrotask(() => this.onopen?.()); }
+    send(raw: string) {
+      const message = JSON.parse(raw) as { type: string; session?: unknown };
+      this.sent.push(message);
+      if (message.type === 'session.update') this.emit('session.updated', { session: message.session });
+    }
+    emit(type: string, value = {}) { this.onmessage?.({ data: JSON.stringify({ type, ...value }) }); }
+    close() {}
+  }
   for (const [key, value] of Object.entries({
     window: dom.window, document: dom.document, isSecureContext: true,
     navigator: { mediaDevices: { getUserMedia() { captures++; return permission; } } },
+    ...(transcribe ? { WebSocket: Socket } : {}),
     AudioContext: class {
       state = 'running';
       destination = {};
@@ -66,13 +84,18 @@ async function fixture(t: TestContext, pointerType: 'mouse' | 'touch') {
     if (slot.value instanceof HoldGesture) gesture = slot.value;
     return slot.value;
   };
-  const host = { getSnapshot: () => ({ sessionId: 's', visible: true, connected: true }), subscribe: () => () => {} };
+  const host = { getSnapshot: () => ({ sessionId: null, visible: false, connected: false }), subscribe: () => () => {} };
   let service!: SpeechService;
   const context = {
-    apiVersion: 2, uiVersion: 1, uiSurfaceVersion: 1, chatWindowVersion: 1, composerInputVersion: 1, draftLifecycleVersion: 1, draftSubmissionVersion: 1,
+    apiVersion: 3, uiVersion: 1, uiSurfaceVersion: 1, publicComponentsVersion: 1, draftOwnerVersion: 1,
+    composerInputVersion: 1, draftLifecycleVersion: 1, draftSubmissionVersion: 2, components: { get() {} },
     signal: controller.signal,
     request: (_path: string, init: RequestInit) => {
       requests++;
+      if (transcribe) return Promise.resolve(Response.json({
+        clientSecret: 'synthetic-ephemeral', expiresAt: Math.floor(Date.now() / 1000) + 600,
+        socketUrl: 'wss://synthetic.openai.azure.com/openai/v1/realtime?intent=transcription', deployment: 'dictation',
+      }));
       return new Promise<Response>((_resolve, reject) => {
         init.signal!.addEventListener('abort', () => reject(init.signal!.reason), { once: true });
       });
@@ -98,7 +121,6 @@ async function fixture(t: TestContext, pointerType: 'mouse' | 'touch') {
     },
     state: {
       host,
-      chatWindow: { getSnapshot: () => ({ sessionId: 's', status: 'unavailable', hasMore: false, partial: false, messages: [] }), subscribe: () => () => {} },
       bindDraft: (draft: ModuleDraft) => draft,
       register: (registration: { create(): SpeechService }) => {
         service = registration.create();
@@ -106,9 +128,13 @@ async function fixture(t: TestContext, pointerType: 'mouse' | 'touch') {
       },
     },
   } as unknown as ModuleFrontendContext;
+  let actionRevision = 0;
+  const draftListeners = new Set<() => void>();
   const draft: ModuleDraft = {
-    id: 'd', sessionId: 's', purpose: { kind: 'prompt' }, subscribe: () => () => {},
-    getSnapshot: () => ({ text: '', revision: 0, pending: false, unconfirmed: false, retired: false, hasContent: false,
+    id: 'd', purpose: { kind: 'prompt' },
+    subscribe: listener => { draftListeners.add(listener); return () => { draftListeners.delete(listener); }; },
+    getSnapshot: () => ({ text: '', revision: 0, actionRevision, editable: true, submittable: true,
+      capabilities: { attachments: false }, pending: false, unconfirmed: false, retired: false, hasContent: false,
       blocks: leases ? [{ id: 'lease', reason: 'speech' }] : [] }),
     editText: () => assert.fail('no transcript expected'),
     editTextIfRevision: () => assert.fail('no transcript expected'),
@@ -131,10 +157,9 @@ async function fixture(t: TestContext, pointerType: 'mouse' | 'touch') {
   const Input = input.wrap(() => null) as unknown as (props: ComposerInputProps) => Element;
   const StatusEditor = status.wrap(() => null) as unknown as (props: { draft: ModuleDraft }) => Element;
   const Status = (StatusEditor({ draft }).children[0] as Element).type as (props: { id: string }) => Element | null;
-  const editor = {
-    ...dom.editor(),
-    focus() { focuses++; this.ownerDocument.activeElement = this; },
-  };
+  const editor = Object.assign(dom.editor(), {
+    focus(this: ReturnType<typeof dom.editor>) { focuses++; this.ownerDocument.activeElement = this; },
+  });
   let props: ComposerInputProps = {
     draft, operation: 'prompt', disabled: false, sendBlocked: false, value: '',
     onSubmit: () => assert.fail('never submit'), onChange() {},
@@ -169,8 +194,24 @@ async function fixture(t: TestContext, pointerType: 'mouse' | 'touch') {
   return {
     service, render, event, grant: () => grant(stream), dom, editor, dispose: () => frontend.dispose?.(),
     abort: () => controller.abort(),
+    changeAction: () => { actionRevision++; for (const listener of [...draftListeners]) listener(); render(); },
+    pcm: () => port.onmessage?.({ data: { type: 'pcm', buffer: new ArrayBuffer(4800) } }),
+    finishTranscript: (text: string) => {
+      assert.equal(sockets.length, 1);
+      const socket = sockets[0]!;
+      assert.equal(socket.sent.filter(message => message.type === 'input_audio_buffer.commit').length, 1);
+      assert.equal(socket.sent.filter(message => message.type === 'input_audio_buffer.clear').length, 1);
+      socket.emit('input_audio_buffer.committed', { item_id: 'original-item', previous_item_id: null });
+      socket.emit('input_audio_buffer.cleared');
+      socket.emit('conversation.item.input_audio_transcription.completed',
+        { item_id: 'original-item', content_index: 0, transcript: text });
+    },
     updateProps: (patch: Partial<ComposerInputProps>) => { props = { ...props, ...patch }; render(); },
     key: (type: 'keydown' | 'keyup', patch?: Partial<KeyboardEvent>) => { const event = dom.key(type, patch); render(); return event; },
+    presentation: () => ({
+      microphoneDisabled: (tree.children[1] as Element).props.disabled,
+      gestureVisible: !!(tree.children[0] as Element).children[1],
+    }),
     holding: () => gesture.getSnapshot(),
     clickMic: () => { ((tree.children[1] as Element).props.onClick as () => void)(); return render(); },
     values: () => ({ captures, contexts, requests, trackStops, focuses, leases, intents, captured }),
@@ -178,6 +219,50 @@ async function fixture(t: TestContext, pointerType: 'mouse' | 'touch') {
 }
 
 for (const pointerType of ['mouse', 'touch'] as const) {
+  test(`${pointerType}: owner action changes detach pointer ownership without discarding original recovery`, async t => {
+    for (const phase of ['permission', 'recording', 'released'] as const) {
+      await t.test(phase, async t => {
+        const f = await fixture(t, pointerType, true);
+        f.event('onPointerDown');
+        t.mock.timers.tick(HOLD_DELAY);
+        assert.equal(f.service.getSnapshot('d').phase, 'permission');
+        if (phase !== 'permission') {
+          f.grant(); await settle();
+          f.pcm();
+          assert.equal(f.service.getSnapshot('d').phase, 'recording');
+          assert.equal(f.holding(), true);
+        }
+        if (phase === 'released') f.event('onPointerUp');
+        f.changeAction();
+        assert.equal(f.holding(), false, 'changed action must detach the gesture, not leave a trailing pointerup able to cancel');
+        f.event('onPointerUp');
+        f.event('onClick');
+        if (phase === 'permission') {
+          f.grant(); await settle();
+          assert.equal(f.service.getSnapshot('d').phase, 'idle');
+          assert.equal(f.service.hasRetainedRecording('d'), false);
+        } else {
+          assert.equal(f.service.hasRetainedRecording('d'), true, 'normal pointerup must preserve the already-sealed original recording');
+          await settle();
+          t.mock.timers.tick(25);
+          await settle();
+          f.finishTranscript('words for the original action');
+          await settle();
+          assert.equal(f.service.getSnapshot('d').recovery?.text, 'words for the original action');
+          assert.equal(f.service.getSnapshot('d').sendOutcome, null, 'no stale-action dispatch was attempted');
+          assert.equal(f.service.hasRetainedRecording('d'), true);
+          assert.equal(f.service.canInsert('d'), false, 'recovery cannot enter the new action');
+          assert.equal(f.service.canStart('d'), false, 'retained original work cannot be silently replaced');
+        }
+        assert.equal(f.values().captures, 1);
+        assert.equal(f.values().trackStops, 1);
+        assert.equal(f.values().leases, 0);
+        assert.equal(f.values().intents, phase === 'released' ? 1 : 0);
+        assert.equal(f.values().focuses, 0);
+      });
+    }
+  });
+
   test(`${pointerType}: short press stays internal through down, threshold wait, release and click`, async t => {
     const f = await fixture(t, pointerType);
     const idle = f.service.getSnapshot();
@@ -260,6 +345,84 @@ test('microphone button still starts permission immediately without a pending ho
   f.grant(); await settle();
   assert.equal(f.render(), null);
   assert.equal(f.values().trackStops, 1);
+});
+
+test('pointer, microphone and F8 all require an actual available editor, not background Chat state', async t => {
+  for (const condition of ['detached', 'hidden', 'offscreen', 'disabled', 'readonly', 'document-hidden'] as const) {
+    await t.test(condition, async t => {
+      const f = await fixture(t, 'mouse');
+      if (condition === 'detached') f.editor.isConnected = false;
+      if (condition === 'hidden') f.editor.style.display = 'none';
+      if (condition === 'offscreen') f.editor.rect = { left: 1100, right: 1300, top: 0, bottom: 80 };
+      if (condition === 'disabled') f.editor.disabled = true;
+      if (condition === 'readonly') f.editor.readOnly = true;
+      if (condition === 'document-hidden') f.dom.document.visibilityState = 'hidden';
+      f.dom.mutate();
+      assert.equal(f.service.canStart('d'), false);
+      f.clickMic();
+      f.event('onPointerDown');
+      t.mock.timers.tick(HOLD_DELAY);
+      f.key('keydown'); f.key('keyup');
+      assert.equal(f.values().captures, 0);
+      assert.equal(f.values().intents, 0);
+      assert.equal(f.values().leases, 0);
+    });
+  }
+});
+
+test('modal closure and document focus restore microphone and gesture through surface notifications alone', async t => {
+  for (const cause of ['modal', 'focus'] as const) {
+    await t.test(cause, async t => {
+      const f = await fixture(t, 'mouse');
+      assert.deepEqual(f.presentation(), { microphoneDisabled: false, gestureVisible: true });
+      const before = f.service.getSnapshot('d');
+      if (cause === 'modal') {
+        f.dom.document.overlays = [{ contains: () => false }];
+        f.dom.mutate();
+      } else {
+        f.dom.document.focused = false;
+        f.dom.window.dispatchEvent(new Event('focus'));
+      }
+      assert.notEqual(f.service.getSnapshot('d'), before);
+      f.render();
+      assert.deepEqual(f.presentation(), { microphoneDisabled: true, gestureVisible: false });
+      const unavailable = f.service.getSnapshot('d');
+      if (cause === 'modal') {
+        f.dom.document.overlays = [];
+        f.dom.mutate();
+      } else {
+        f.dom.document.focused = true;
+        f.dom.window.dispatchEvent(new Event('focus'));
+      }
+      assert.notEqual(f.service.getSnapshot('d'), unavailable, 'availability recovery wakes React without prop updates');
+      f.render();
+      assert.deepEqual(f.presentation(), { microphoneDisabled: false, gestureVisible: true });
+      const restored = f.service.getSnapshot('d');
+      f.dom.mutate();
+      f.dom.window.dispatchEvent(new Event('focus'));
+      assert.equal(f.service.getSnapshot('d'), restored, 'unchanged DOM availability does not create a render loop');
+      f.key('keydown');
+      assert.equal(f.values().captures, 1);
+      f.key('keyup'); f.grant(); await settle();
+      assert.equal(f.values().trackStops, 1);
+      assert.equal(f.values().intents, 0);
+    });
+  }
+});
+
+test('surface loss during button recording interrupts once without observer refresh reentrancy', async t => {
+  const f = await fixture(t, 'mouse');
+  f.clickMic(); f.grant(); await settle();
+  assert.equal(f.service.getSnapshot('d').phase, 'recording');
+  f.dom.document.overlays = [{ contains: () => false }];
+  f.dom.mutate();
+  f.dom.mutate();
+  assert.equal(f.service.getSnapshot('d').phase, 'stopping');
+  assert.equal(f.values().trackStops, 1);
+  assert.equal(f.values().intents, 0);
+  f.service.clear('d');
+  await settle();
+  assert.equal(f.values().leases, 0);
 });
 
 test('F8 uses real preparation and captures one intent only after ready; mic stop remains draft-only', async t => {

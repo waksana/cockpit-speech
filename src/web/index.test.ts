@@ -2,9 +2,10 @@ import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { readFile } from 'node:fs/promises';
 import type { ComposerInputProps, ModuleDraft, ModuleFrontendContext } from '@waksana/cockpit-module-sdk/frontend';
-import { activate, composeEditorRef } from './index.ts';
+import { activate, composeEditorRef, frontendApiVersion } from './index.ts';
 import type { SpeechService, SpeechSnapshot } from './speech.ts';
 import { HoldGesture } from './hold.ts';
+import { keyboardDOM } from './keyboard.fixture.test.ts';
 
 test('editor refs preserve object refs, callback nulls and React 19 cleanup', () => {
   const node = {} as HTMLTextAreaElement;
@@ -23,11 +24,15 @@ test('editor refs preserve object refs, callback nulls and React 19 cleanup', ()
   if (cleanup) cleanup();
   assert.equal(cleaned, 1); assert.equal(local.current, null);
 });
-test('frontend requires additive capabilities rather than assuming them from API v2', () => {
-  for (const patch of [{ uiSurfaceVersion: undefined }, { uiSurfaceVersion: 0 }, { uiSurfaceVersion: 2 }, { chatWindowVersion: undefined }, { composerInputVersion: undefined }, { draftLifecycleVersion: undefined }, { draftSubmissionVersion: undefined }]) {
+test('frontend API v3 requires public owner, component and submission capabilities', () => {
+  assert.equal(frontendApiVersion, 3);
+  for (const patch of [{ apiVersion: 2 }, { uiSurfaceVersion: undefined }, { uiSurfaceVersion: 0 }, { uiSurfaceVersion: 2 },
+    { publicComponentsVersion: undefined }, { draftOwnerVersion: undefined }, { components: {} },
+    { composerInputVersion: undefined }, { draftLifecycleVersion: undefined }, { draftSubmissionVersion: undefined }, { draftSubmissionVersion: 1 }]) {
     assert.throws(() => activate({
-      apiVersion: 2, uiVersion: 1, uiSurfaceVersion: 1, chatWindowVersion: 1, composerInputVersion: 1, draftLifecycleVersion: 1, draftSubmissionVersion: 1,
-      state: { chatWindow: {}, bindDraft() {} }, ...patch,
+      apiVersion: 3, uiVersion: 1, uiSurfaceVersion: 1, publicComponentsVersion: 1, draftOwnerVersion: 1,
+      composerInputVersion: 1, draftLifecycleVersion: 1, draftSubmissionVersion: 2, components: { get() {} },
+      state: { bindDraft() {} }, ...patch,
     } as unknown as ModuleFrontendContext), /配套宿主/);
   }
 });
@@ -57,21 +62,24 @@ test('input middleware preserves native textarea props and keeps decision microp
   let focused = false;
   let level = 0;
   let onGesture: ((gesture: HoldGesture) => void) | undefined;
-  for (const key of ['window', 'document']) {
+  const dom = keyboardDOM();
+  const mountedEditor = dom.editor();
+  for (const key of ['window', 'document'] as const) {
     const original = Object.getOwnPropertyDescriptor(globalThis, key);
-    Object.defineProperty(globalThis, key, { configurable: true, value: new EventTarget() });
+    Object.defineProperty(globalThis, key, { configurable: true, value: dom[key] });
     t.after(() => original ? Object.defineProperty(globalThis, key, original) : Reflect.deleteProperty(globalThis, key));
   }
   const cleanupEffects = () => { for (const cleanup of effects.splice(0).reverse()) cleanup(); };
-  const host = { getSnapshot: () => ({ sessionId: 's', visible: true, connected: true }), subscribe: () => () => {} };
+  const host = { getSnapshot: () => ({ sessionId: null, visible: false, connected: false }), subscribe: () => () => {} };
   const context = {
-    apiVersion: 2, uiVersion: 1, uiSurfaceVersion: 1, chatWindowVersion: 1, composerInputVersion: 1, draftLifecycleVersion: 1, draftSubmissionVersion: 1,
+    apiVersion: 3, uiVersion: 1, uiSurfaceVersion: 1, publicComponentsVersion: 1, draftOwnerVersion: 1,
+    composerInputVersion: 1, draftLifecycleVersion: 1, draftSubmissionVersion: 2, components: { get() {} },
     signal: new AbortController().signal, request: async () => { throw new Error('No HTTP from render'); }, report() {},
     createPortal: () => assert.fail('recording feedback must stay in normal component flow'),
     react: {
       Fragment: 'fragment',
       createElement: (type: unknown, props: Record<string, unknown> | null, ...children: unknown[]): Element => ({ type, props: props ?? {}, children }),
-      useRef: (value: unknown) => ({ current: value }),
+      useRef: (value: unknown) => ({ current: value === null ? mountedEditor : value }),
       useState: () => [focused, () => {}],
       useMemo: (factory: () => unknown) => {
         const value = factory();
@@ -88,7 +96,6 @@ test('input middleware preserves native textarea props and keeps decision microp
     },
     state: {
       host,
-      chatWindow: { getSnapshot: () => ({ sessionId: 's', status: 'unavailable', hasMore: false, partial: false, messages: [] }), subscribe: () => () => {} },
       bindDraft: (draft: ModuleDraft) => draft,
       register: (registration: { create(): SpeechService; dispose(value: SpeechService): void }) => {
         service = registration.create();
@@ -98,6 +105,7 @@ test('input middleware preserves native textarea props and keeps decision microp
     },
   } as unknown as ModuleFrontendContext;
   const frontend = await activate(context);
+  assert.equal(frontend.apiVersion, 3, 'activation needs no ChatWindow and disconnected background Chat is irrelevant');
   assert.deepEqual(frontend.writes, ['text']);
   assert.deepEqual(frontend.sends, ['draft']);
   assert.equal(frontend.menus, undefined);
@@ -111,8 +119,9 @@ test('input middleware preserves native textarea props and keeps decision microp
       const nativeSubmit = () => { throw new Error('Never submit from rendering'); };
       const nativeTextChange = () => {};
       const draft = {
-        id: operation, sessionId: 's', purpose: operation === 'prompt' ? { kind: operation } : { kind: operation, requestId: 'request' },
-        getSnapshot: () => ({ text: '', revision: 0, pending: false, unconfirmed: false, hasContent: false, blocks: [], retired: false }),
+        id: operation, purpose: operation === 'prompt' ? { kind: operation } : { kind: operation, requestId: 'request' },
+        getSnapshot: () => ({ text: '', revision: 0, actionRevision: 0, editable: true, submittable: true,
+          capabilities: { attachments: false }, pending: false, unconfirmed: false, hasContent: false, blocks: [], retired: false }),
         subscribe: () => () => {}, editText() {}, editTextIfRevision: () => true, block: () => () => {},
         captureSend: () => { throw new Error('No send intent from rendering'); },
       } as ModuleDraft;
@@ -161,8 +170,7 @@ test('input middleware preserves native textarea props and keeps decision microp
         assert.equal(layer.props['aria-hidden'], true);
         assert.equal(layer.props.tabIndex, undefined, 'keyboard focus stays on the real textarea');
         let nativeFocus = 0;
-        const editor = { ownerDocument: { activeElement: null },
-          getBoundingClientRect: () => ({ left: 0, right: 100, top: 0, bottom: 50 }),
+        const editor = { ...dom.editor(),
           focus: () => { nativeFocus++; } };
         const emptyBase = (empty.children[0] as Element).children[0] as Element;
         (emptyBase.props.editorRef as (node: typeof editor) => void)(editor);
@@ -326,7 +334,7 @@ test('input middleware preserves native textarea props and keeps decision microp
     error = '自动发送未执行。录音和文字已保留，请确认原草稿后使用原发送按钮。';
     assert.equal((Status()!.children[1] as Element).children[0], error);
     phase = 'send-error'; sendOutcome = 'unconfirmed';
-    recovery = { id: 'prompt', sessionId: 's', purpose: 'prompt', text: 'synthetic message' };
+    recovery = { id: 'prompt', purpose: 'prompt', text: 'synthetic message' };
     error = '发送结果未确认，可能已提交；不会自动重发。';
     const unknown = Panel()!;
     assert.equal(unknown.props.className, 'ck-surface cockpit-speech-panel');

@@ -90,9 +90,10 @@ function serviceFixture(f: ReturnType<typeof fixture>, writable = false,
   let revision = 0;
   let askContext = options.askContext;
   const draft: ModuleDraft = {
-    id: 'exact-input', sessionId: 's', purpose: options.purpose ?? { kind: 'prompt' },
+    id: 'exact-input', purpose: options.purpose ?? { kind: 'prompt' },
     subscribe: () => () => {},
-    getSnapshot: () => ({ text, revision, pending: false, unconfirmed: false, hasContent: !!text, retired: false, blocks: [], askContext }),
+    getSnapshot: () => ({ text, revision, actionRevision: 0, editable: true, submittable: true,
+      capabilities: { attachments: false }, pending: false, unconfirmed: false, hasContent: !!text, retired: false, blocks: [], askContext }),
     editText: value => { assert.ok(writable, 'Failure must not edit'); text = value; revision++; },
     editTextIfRevision(value, expected) {
       assert.equal(writable, true, 'failure must not edit');
@@ -110,12 +111,10 @@ function serviceFixture(f: ReturnType<typeof fixture>, writable = false,
   };
   const service = new SpeechService({
     signal: new AbortController().signal,
-    host: { getSnapshot: () => ({ sessionId: 's', visible: true, connected: true }), subscribe: () => () => {} },
-    chatWindow: { getSnapshot: () => ({ sessionId: 's', status: 'unavailable', messages: [], hasMore: false, partial: false }), subscribe: () => () => {} },
     session: async () => credential(),
     prepare: (signal, fail, limit) => prepareRecording(signal, fail, limit, f.env), report: () => assert.fail('No error notification'),
   });
-  service.setTarget({ draft, disabled: false, sendBlocked: false, selection: () => ({ start: 0, end: 0 }) });
+  service.setTarget({ draft, available: () => true, disabled: false, sendBlocked: false, selection: () => ({ start: 0, end: 0 }) });
   return { service, draft, leases: () => leases, setAskContext: (value: DraftAskContext | undefined) => { askContext = value; } };
 }
 
@@ -136,7 +135,7 @@ test('ask context reaches Azure configuration once per attempt, unchanged on bac
   await turn();
   assert.equal(s.service.getSnapshot(s.draft.id).phase, 'retry');
   s.setAskContext({ question: 'Unrelated replacement question', choices: ['Gamma'] });
-  s.service.setTarget({ draft: s.draft, disabled: false, sendBlocked: false, selection: () => ({ start: 0, end: 0 }) });
+  s.service.setTarget({ draft: s.draft, available: () => true, disabled: false, sendBlocked: false, selection: () => ({ start: 0, end: 0 }) });
   const retry = s.service.retry();
   await pump();
   assert.equal(f.sockets.length, 2);
@@ -244,7 +243,7 @@ test('navigation flush/final timeouts stay with the hidden draft and retry retai
     assert.equal(s.leases(), 0);
     assert.equal(f.sockets[0]!.closed, 1, 'a failed stop cannot leave an orphan upload running');
     if (stage === 'tail') assert.equal(f.sockets[0]!.sent.some(value => value.type === 'input_audio_buffer.commit'), false);
-    s.service.setTarget({ draft: s.draft, disabled: false, sendBlocked: false, selection: () => ({ start: 0, end: 0 }) });
+    s.service.setTarget({ draft: s.draft, available: () => true, disabled: false, sendBlocked: false, selection: () => ({ start: 0, end: 0 }) });
     const retry = s.service.retry();
     await turn(); t.mock.timers.tick(25); await turn();
     const socket = f.sockets.at(-1)!;
@@ -277,7 +276,7 @@ test('held-limit flush failure closes its transport before navigation, retaining
   t.mock.timers.tick(200_000); await turn();
   assert.equal(f.sockets[0]!.sent.some(value => value.type === 'input_audio_buffer.commit'), false);
   assert.equal(f.sockets.length, 1);
-  s.service.setTarget({ draft: s.draft, disabled: false, sendBlocked: false, selection: () => ({ start: 0, end: 0 }) });
+  s.service.setTarget({ draft: s.draft, available: () => true, disabled: false, sendBlocked: false, selection: () => ({ start: 0, end: 0 }) });
   const retry = s.service.retry();
   await turn(); t.mock.timers.tick(25); await turn();
   f.sockets[1]!.commit(); f.sockets[1]!.final('recovered limit');

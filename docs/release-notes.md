@@ -5,6 +5,21 @@ and verified deployment descriptors. See [Releases](releases.md) for the cutover
 single-attempt publication recovery and explicitly selected in-place Milestones.
 Release notes for each Rolling contain that PR's complete title and body.
 
+## Owner-neutral public drafts
+
+Uses the published SDK `0.7.0` and frontend API v3, with public components v1,
+draft owners v1 and draft submission v2. One composer enhancement supports both
+native Chat and generic owners such as Assistant. Speech never selects a
+session/topic or borrows background Chat context: the owner provides bounded
+visible reference text and its own submission adapter.
+
+F8 and pointer hold retain one explicit release consent, streaming dictation,
+recovery and independent draft-send permission. Only an unambiguous registered
+foreground editor can acquire F8; native modals exclude background editors.
+Reply/action changes preserve the old recovery without writing a new target.
+Rejected, uncertain and incomplete local acknowledgements never recapture or
+replay business submission. The ordinary microphone still only inserts text.
+
 ## Historical: 0.9.3 (source preparation)
 
 Replaces the generated local SDK and host export preparation with the exact

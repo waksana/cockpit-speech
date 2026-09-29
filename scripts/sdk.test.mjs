@@ -50,7 +50,7 @@ test('CI uses authenticated registry installation and exact package verification
 
 test('published SDK has four importable public entries and no bundled runtime dependencies', async () => {
   const sdk = JSON.parse(await readFile(new URL('../node_modules/@waksana/cockpit-module-sdk/package.json', import.meta.url), 'utf8'));
-  assert.equal(sdk.version, '0.2.0');
+  assert.equal(sdk.version, '0.7.0');
   assert.deepEqual(Object.keys(sdk.exports).sort(), ['.', './backend', './frontend', './runtime']);
   assert.equal(Object.keys(sdk.dependencies ?? {}).length, 0);
   for (const name of ['@types/node', '@types/react', 'react']) assert.equal(sdk.peerDependenciesMeta[name].optional, true);

@@ -6,7 +6,7 @@ Cockpit Speech is licensed under **GPL-3.0-only**. The complete license is in
 The generic build-identity, deterministic packaging and archive
 verification machinery in `scripts/` is adapted from the GPL-3.0-only
 `cockpit-file` module. No file-module business logic or runtime dependency is
-used. The build-only `@waksana/cockpit-module-sdk@0.2.0` dependency is published
+used. The build-only `@waksana/cockpit-module-sdk@0.7.0` dependency is published
 from Cockpit under GPL-3.0-only. Its package identity and integrity are recorded
 in the lockfile and build receipt; no SDK, React, Zod, native runtime or host
 implementation is copied into Speech's archive.

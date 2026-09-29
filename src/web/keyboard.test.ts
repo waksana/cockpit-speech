@@ -166,3 +166,34 @@ test('multiple composers, duplicate registration, rebinding and disposal never d
   assert.equal(f.counts().starts, 2);
   assert.equal(f.observers(), 0);
 });
+
+test('the shared surface observer interrupts button or pointer capture without an F8 owner', t => {
+  const f = fixture(t);
+  f.phase('recording');
+  f.document.overlays = [{ contains: () => false }];
+  f.mutate();
+  assert.deepEqual(f.counts(), { starts: 0, releases: 0, interrupts: 1, cancels: 0 });
+  f.mutate();
+  assert.equal(f.counts().interrupts, 1, 'a stopped background operation is not repeatedly interrupted');
+  f.key('keyup');
+  assert.equal(f.counts().releases, 0);
+});
+
+test('modal foreground wins regardless of registration order, then replacement cannot adopt release', t => {
+  const f = fixture(t);
+  const foreground = f.editor;
+  const background = f.editor.ownerDocument;
+  let backgroundStarts = 0;
+  f.register({ ...f.target, editor: () => ({ ...f.editor, ownerDocument: background }) as unknown as HTMLTextAreaElement,
+    start() { backgroundStarts++; } });
+  f.document.overlays = [{ contains: (element: unknown) => element === foreground }];
+  f.key('keydown'); f.phase('recording');
+  assert.equal(f.counts().starts, 1);
+  assert.equal(backgroundStarts, 0);
+  f.editor.isConnected = false;
+  f.mutate();
+  f.document.overlays = [];
+  f.key('keyup');
+  assert.equal(f.counts().releases, 0);
+  assert.equal(backgroundStarts, 0);
+});
